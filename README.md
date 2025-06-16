@@ -2,12 +2,12 @@
 
 ## 项目概述
 
-一个基于深度学习的实时目标检测系统，集成了 YOLO 目标检测模型、ONNXRUNTIME 加速和手柄控制映射功能。该项目能够通过屏幕截图进行目标检测和追踪，并将手柄输入映射到虚拟 Xbox 360 手柄，实现自动化控制。
+一个基于深度学习的实时目标检测系统，集成了 YOLO 目标检测模型、ONNXRUNTIME 加速和手柄控制映射功能。该项目能够通过屏幕截图进行目标检测和追踪，并将手柄输入映射到虚拟 Xbox 360/DualShock 4 手柄，实现自动化控制。
 
 ## 主要特性
 
 - 🎯 **实时目标检测**：基于 YOLO 模型的高效目标识别
-- 🎮 **手柄映射**：DualSense 手柄的映射（除了触控板和 PS 键）
+- 🎮 **手柄映射**：DualSense 手柄的映射，原始输入将被拦截
 - 📸 **屏幕捕获**：实时屏幕截图和目标追踪
 - ⚡ **GPU 加速**：只要您的 GPU 支持 DX12 就可以
 - 🔧 **易于配置**：初始化和配置工具
@@ -17,7 +17,7 @@
 
 - Windows 操作系统
 - 现代 GPU
-- 手柄（除了 NS）
+- 手柄（目前只支持 DualSense）
 
 ## 使用方法
 
@@ -27,8 +27,8 @@
 
 ## 致谢
 
-- [ViGEmBus](https://github.com/nefarius/ViGEmBus) - 虚拟游戏手柄驱动
-- [vgamepad](https://github.com/yannbouteiller/vgamepad) - 虚拟游戏手柄库
+- [ViGEmBus](https://github.com/nefarius/ViGEmBus) - Windows kernel-mode driver emulating well-known USB game controllers
+- [HidHide](https://github.com/nefarius/HidHide) - Gaming Input Peripherals Device Firewall for Windows
 
 ## ⚠️ **重要提示**：
 
@@ -37,10 +37,10 @@
 ## 技术支持
 
 如遇问题，请：
-1. 检查系统要求和依赖安装
+1. 检查系统要求
 2. 查看项目 Issues 页面
 3. 提交详细的问题报告
 
 ---
 
-**项目状态**：积极开发中 | **最后更新**：2025年6月7日
+**项目状态**：积极开发中 | **最后更新**：2025年6月16日
