@@ -1,16 +1,13 @@
 import ctypes
 from pathlib import Path
 import os
-import json
 import traceback
-import subprocess
 import sys
+from pywinusb import hid
 
 
 def handle_exception(e):
-    sys.stdout.write(f"发生异常：{str(e)}")
-    sys.stdout.write(f"\n异常类型：{type(e).__name__}")
-    sys.stdout.write(f"\n完整堆栈信息：\n{traceback.format_exc()}\n")
+    sys.stdout.write(f"\n{traceback.format_exc()}\n")
 
 def list_subdirs(path):
     # 列出 path 下的所有条目，并筛选出目录
@@ -68,28 +65,23 @@ def get_scaling_factor():
 
 def enum_hid_devices():
     """
-    枚举系统中所有 HID 设备，返回一个集合（set），
-    其中每个元素为三元组 (vendor_id, product_id, device_path)。
-    之所以包含 device_path，是为了区分同样 VID/PID 但路径不同的多个设备。
+    枚举所有 HID 设备，仅返回以下字段：
+      - vendor_id    (hex 字符串)
+      - product_id   (hex 字符串)
+      - device_path  (原始路径)
+      - product_name (HID 描述符名称)
+    返回：
+        List[Dict[str, str]]
     """
-    device_set = set()
-    # 创建一个 HID 设备筛选器，不指定任何 VID/PID，表示获取所有 HID 设备
-    all_devices = subprocess.run(
-        [
-            "C:/Program Files/Nefarius Software Solutions/HidHide/x64/HidHideCLI.exe", 
-            "--dev-gaming"
-        ],
-        capture_output=True, text=True
-    )
-    for device in json.loads(all_devices.stdout):
-        name = device["friendlyName"]
-        for device_info in device["devices"]:
-            if device_info["present"] == True:
-                path = device_info["symbolicLink"]
-                vid = "0x" + path[path.find("vid_")+4:path.find("vid_")+8]
-                pid = "0x" + path[path.find("pid_")+4:path.find("pid_")+8]
-                device_set.add((name, vid, pid, path))
-    return device_set
+    devices = hid.find_all_hid_devices()
+    info_set = set()
+    for dev in devices:
+        name = dev.product_name
+        vid = hex(dev.vendor_id)
+        pid = hex(dev.product_id)
+        path = dev.device_path
+        info_set.add((name, vid, pid, path))
+    return info_set
 
 def median_of_three(x, max, min): # 比min，max嵌套函数更快
     if x < min:

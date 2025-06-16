@@ -2,10 +2,10 @@ import tkinter as tk
 from tkinter import scrolledtext
 import json
 import sys
-import subprocess
 
 from utils.tools import enum_hid_devices, find_model_files
 from utils.delay_stdout import DelayedStdoutRedirector
+
 
 class InitApp:
     def __init__(self, root):
@@ -55,7 +55,7 @@ class InitApp:
     def _poll_controller(self):
         devices = enum_hid_devices()
         # 过滤出 Sony(0x054C) 和 Microsoft(0x045E) 设备
-        filtered = [(name, vid, pid, path) for (name, vid, pid, path) in devices if vid in ("0x054c")]
+        filtered = [(name, vid, pid, path) for (name, vid, pid, path) in devices if vid in ("0x54c", "0x45e")]
         self.filtered_devices = filtered
         if not filtered:
             sys.stdout.write(">>> 未检测到 DualSense 手柄，请插入手柄后回车重试。")
@@ -90,13 +90,6 @@ class InitApp:
                 self.config["controller"]["Product_ID"] = pid
                 self.config["controller"]["Instance_ID"] = "HID\\" + "\\".join(path.split("#")[1:-1])
                 self.config["controller"]["Path"] = path
-                subprocess.run(
-                    [
-                        "C:/Program Files/Nefarius Software Solutions/HidHide/x64/HidHideCLI.exe", 
-                        "--dev-hide", 
-                        self.config["controller"]["Instance_ID"]
-                    ]
-                )
                 sys.stdout.write(">>> 手柄配置完成。")
                 sys.stdout.write(">>> 正在初始化模型配置...")
                 sys.stdout.write(">>> 开始枚举模型文件…")
