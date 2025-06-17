@@ -123,16 +123,20 @@ class HidHideController:
     def add_this_to_whitelist(self, exe: str):
         exe = self.get_nt_path(exe)
         wl = self.get_whitelist()
-        wl.append(exe)
-        self.set_whitelist(wl)
+        if exe not in wl:
+            wl.append(exe)
+            self.set_whitelist(wl)
 
     def set_this_to_visible(self, instance: str, state):
         if state:
             bl = self.get_blacklist()
-            bl.append(instance)
-            self.set_blacklist(bl)
+            bl_up = {p.upper() for p in bl}
+            inst_up = instance.upper()
+            if inst_up not in bl_up:
+                bl_up.add(inst_up)
+                self.set_blacklist(list(bl_up))
         else:
-            bl = [p for p in self.get_blacklist() if p != instance]
+            bl = [p for p in self.get_blacklist() if p.upper() != instance.upper()]
             self.set_blacklist(bl)
         self.set_active(state)
 

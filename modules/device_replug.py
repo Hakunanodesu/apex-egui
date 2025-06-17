@@ -36,13 +36,17 @@ class DeviceReplugCM:
         self.instance_id = None
         self.devInst = wintypes.DWORD()
 
-    def _locate_devnode(self):
+    def _locate_devnode(self, instance_id: str):
         """
         定位 DevNode，并存入 self.devInst
         """
-        rc = self._CM_Locate_DevNodeW(ctypes.byref(self.devInst), self.instance_id, self._CM_LOCATE_DEVNODE_NORMAL)
+        rc = self._CM_Locate_DevNodeW(
+            ctypes.byref(self.devInst), 
+            instance_id, 
+            self._CM_LOCATE_DEVNODE_NORMAL
+        )
         if rc != self._CR_SUCCESS:
-            raise ctypes.WinError(ctypes.get_last_error() or rc)
+            raise OSError(f"CM_Locate_DevNodeW failed: 0x{rc:04X}")
 
     def disable(self):
         """
@@ -50,7 +54,7 @@ class DeviceReplugCM:
         """
         rc = self._CM_Disable_DevNode(self.devInst.value, 0)
         if rc != self._CR_SUCCESS:
-            raise ctypes.WinError(ctypes.get_last_error() or rc)
+            raise OSError(f"CM_Disable_DevNode failed: 0x{rc:04X}")
 
     def enable(self):
         """
@@ -58,7 +62,7 @@ class DeviceReplugCM:
         """
         rc = self._CM_Enable_DevNode(self.devInst.value, 0)
         if rc != self._CR_SUCCESS:
-            raise ctypes.WinError(ctypes.get_last_error() or rc)
+            raise OSError(f"CM_Enable_DevNode failed: 0x{rc:04X}")
 
     def reenumerate(self):
         """
@@ -66,14 +70,13 @@ class DeviceReplugCM:
         """
         rc = self._CM_Reenumerate_DevNode(self.devInst.value, 0)
         if rc != self._CR_SUCCESS:
-            raise ctypes.WinError(ctypes.get_last_error() or rc)
+            raise OSError(f"CM_Reenumerate_DevNode failed: 0x{rc:04X}")
 
     def replug(self, instance_id: str):
         """
         执行软拔插: 禁用 -> 重新枚举 -> 启用 -> 重新枚举
         """
-        self.instance_id = instance_id
-        self._locate_devnode()
+        self._locate_devnode(instance_id)
         self.disable()
         self.reenumerate()
         self.enable()

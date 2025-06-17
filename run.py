@@ -95,9 +95,6 @@ class App:
         self.latency_label = tk.Label(root, text=self.latency_str, font=("Arial", 10), justify=tk.LEFT)
         self.latency_label.pack(side="left", padx=10, pady=(5, 5))
 
-        # 清空手柄独占
-        self.set_exclusive(state=False, verbose=False)
-
         if not driver_ready:
             if_download = messagebox.askyesno("跳转下载", "是否下载缺失的驱动？")
             if if_download:
