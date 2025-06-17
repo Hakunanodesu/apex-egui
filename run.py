@@ -413,6 +413,8 @@ class App:
     def on_close(self):
         if messagebox.askyesno("退出", "确定退出吗？"):
             self.running = False
+            if self.mapper:
+                self.mapper.stop()
             self.set_exclusive(state=False, verbose=True)
             self.hidhide.close()
             # messagebox.showinfo("调试", "on_close")
