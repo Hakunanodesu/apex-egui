@@ -205,7 +205,7 @@ class DualSenseToDS4Mapper:
                     if self._sdl_controller:
                         SDL_GameControllerClose(self._sdl_controller)
                     self._sdl_controller = SDL_GameControllerOpen(idx)
-                    sys.stdout.write(f"\n>>> 已打开 VID=0x{vid:04X}, PID=0x{pid:04X} 的 {self.controller_name}\n")
+                    sys.stdout.write(f">>> {self.controller_name} → 虚拟 DualShock 4")
                     return True
         sys.stdout.write(f"\n>>> 未找到 VID=0x{self.vendor_id:04X}, PID=0x{self.product_id:04X} 的手柄\n")
         return False
