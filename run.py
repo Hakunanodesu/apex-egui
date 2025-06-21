@@ -23,7 +23,7 @@ from utils.tools import (
     handle_exception, detect_controller_by_a
 )
 from utils.logger import get_logger
-from utils.log_viewer import open_log_viewer
+from modules.log_viewer import open_log_viewer
 from utils.log_cleaner import start_auto_cleanup, stop_auto_cleanup
 
 
