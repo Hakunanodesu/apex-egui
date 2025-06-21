@@ -7,6 +7,9 @@ import time
 from pywinusb import hid
 import XInput
 
+# 导入日志模块
+from .logger import get_logger
+
 
 def detect_controller_by_a():
     """
@@ -30,6 +33,9 @@ def detect_controller_by_a():
         time.sleep(0.005)
 
 def handle_exception(e):
+    """处理异常并记录到日志"""
+    logger = get_logger()
+    logger.log_exception(e, "工具函数异常")
     sys.stdout.write(f"\n{traceback.format_exc()}\n")
 
 def list_subdirs(path):

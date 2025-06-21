@@ -14,5 +14,8 @@ test*
 build.bat
 gitpush.bat
 
+# 忽略日志文件
+logs/
+
 # 保留 .gitkeep 文件
 !**/.gitkeep

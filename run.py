@@ -22,12 +22,19 @@ from utils.tools import (
     list_subdirs, enum_hid_devices, 
     handle_exception, detect_controller_by_a
 )
+from utils.logger import get_logger
+from utils.log_viewer import open_log_viewer
+from utils.log_cleaner import start_auto_cleanup, stop_auto_cleanup
 
 
 class App:
     def __init__(self, root):
         self.root = root
-        self.root.title("TGC v1.1.2")
+        self.root.title("TGC v1.2.0")
+
+        # 初始化日志系统
+        self.logger = get_logger("TGC")
+        self.logger.info("应用程序启动")
 
         self.running = False
         self.mapper_running = False
@@ -39,8 +46,10 @@ class App:
             with open("user_config.json", "r") as f:
                 config = json.load(f)
             self.vendor_id = int(config["controller"]["Vendor_ID"], 16)
-        except Exception:
+            self.logger.info(f"加载配置文件成功，Vendor_ID: {hex(self.vendor_id)}")
+        except Exception as e:
             self.vendor_id = None
+            self.logger.warning(f"加载配置文件失败: {e}")
 
         # 日志输出区
         self.output = scrolledtext.ScrolledText(root, height=15, width=80, state='disabled')
@@ -49,6 +58,7 @@ class App:
 
         self.model_path  = os.path.join(os.path.dirname(__file__), "dependencies", "apv5.onnx")
         sys.stdout.write("\n>>> 已识别到模型路径。")
+        self.logger.info(f"模型路径: {self.model_path}")
         
         self.missing_drivers_link = []
         driver_ready = self.check_resources()
@@ -92,6 +102,10 @@ class App:
         self.button = tk.Button(button_frame, text="启动智慧核心", state='disabled', command=self.toggle)
         self.button.pack(side='left', padx=5)
 
+        # 日志查看按钮
+        self.log_button = tk.Button(button_frame, text="查看日志", command=self.open_log_viewer)
+        self.log_button.pack(side='left', padx=5)
+
         # 延迟信息标签
         self.latency_str = (
             "[Latency] full cycle: waiting...\n"
@@ -102,33 +116,45 @@ class App:
         self.latency_label.pack(side="left", padx=10, pady=(5, 5))
 
         if not driver_ready:
+            self.logger.warning("驱动未就绪，提示用户下载")
             if_download = messagebox.askyesno("跳转下载", "是否下载缺失的驱动？")
             if if_download:
                 sys.stdout.write("\n>>> 请在下载完成后安装到默认路径，然后重启软件（下载慢请使用代理）。如果安装完成后依旧检测不到，可能是因为您在非默认路径安装过该软件，请卸载后重新安装。")
                 for link in self.missing_drivers_link:
                     os.startfile(link)
+                    self.logger.info(f"打开下载链接: {link}")
             else:
+                self.logger.info("用户选择不下载驱动，退出程序")
                 sys.exit()
         else:
+            self.logger.info("驱动已就绪，初始化HidHide和DeviceReplug")
             self.hidhide = HidHideController()
             self.replugger = DeviceReplugCM()
             self.hidhide.add_this_to_whitelist(sys.executable)
 
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
 
+        # 启动自动日志清理
+        start_auto_cleanup(interval_hours=24)
+
     def check_instance(self):
+        self.logger.debug("检查手柄实例")
         if os.path.exists("user_config.json"):
             with open("user_config.json", "r") as f:
                 instance_id = json.load(f)["controller"]["Instance_ID"] 
             for device in enum_hid_devices():
                 if device[3] == instance_id:
+                    self.logger.info("手柄实例检查通过")
                     return True
+            self.logger.warning("检测到手柄实例变动")
             sys.stdout.write("\n>>> 检测到手柄实例变动，可能是手柄未插入或使用了新的手柄。若手柄未插入，请插入手柄后重新打开软件。若使用了新的手柄，请重新初始化。")
         else:
+            self.logger.warning("未检测到用户配置文件")
             sys.stdout.write("\n>>> 未检测到用户配置，请先初始化。")
         return False
 
     def check_resources(self):
+        self.logger.debug("检查驱动资源")
         drivers = {
             "ViGEm Bus Driver": "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe",
             "HidHide": "https://github.com/nefarius/HidHide/releases/download/v1.5.230.0/HidHide_1.5.230_x64.exe"
@@ -147,10 +173,12 @@ class App:
             missing_drivers.append("HidHide")
         sys.stdout.write(f"\n>>> 已检测到 {'，'.join(owned_drivers)} 驱动。")
         if missing_drivers != []:
+            self.logger.warning(f"缺少驱动: {missing_drivers}")
             sys.stdout.write(f"\n>>> 未检测到 {'，'.join(missing_drivers)} 驱动。")
             for driver in missing_drivers:
                 self.missing_drivers_link.append(drivers[driver])
         else:
+            self.logger.info("所有必需驱动已就绪")
             sys.stdout.write("\n>>> 驱动已就绪。")
             return True
         return False
@@ -160,6 +188,7 @@ class App:
 
     def open_cfg(self):
         try:
+            self.logger.info("开始修改识别配置")
             sys.stdout.write("\n>>> 正在修改识别配置...")
             cfg_root = tk.Toplevel(self.root)
             cfg_root.grab_set()  # 使子窗口获得焦点，主窗口无法操作
@@ -168,16 +197,20 @@ class App:
             cfg_root.grab_release()  # 释放焦点
             sys.stdout = DelayedStdoutRedirector(self.output, interval_ms=50)
             if cfg_app.force_quit:
+                self.logger.warning("识别配置修改未完成")
                 sys.stdout.write("\n>>> 识别配置修改未完成。")
                 return
+            self.logger.info("识别配置修改完成")
             sys.stdout.write("\n>>> 识别配置修改完成。")
         except Exception as e:
             if 'cfg_root' in locals():
                 cfg_root.grab_release()  # 确保在发生异常时也释放焦点
+            self.logger.error(f"修改识别配置时出错: {e}")
             sys.stdout.write(f"\n>>> 识别配置修改时出错: {e}")
 
     def start_init(self):
         try:
+            self.logger.info("开始初始化配置")
             self.set_exclusive(state=False, verbose=False)
             sys.stdout.write("\n>>> 开始初始化配置...")
             init_root = tk.Toplevel(self.root)
@@ -187,8 +220,10 @@ class App:
             init_root.grab_release()  # 释放焦点
             sys.stdout = DelayedStdoutRedirector(self.output, interval_ms=50)
             if init_app.force_quit:
+                self.logger.warning("初始化未完成")
                 sys.stdout.write("\n>>> 初始化未完成。")
                 return
+            self.logger.info("配置初始化完成")
             sys.stdout.write("\n>>> 配置初始化完成。")
             with open("user_config.json", "r") as f:
                 config = json.load(f)
@@ -198,6 +233,7 @@ class App:
         except Exception as e:
             if 'init_root' in locals():
                 init_root.grab_release()  # 确保在发生异常时也释放焦点
+            self.logger.error(f"初始化配置时出错: {e}")
             sys.stdout.write(f"\n>>> 初始化配置时出错: {e}")
 
     def toggle_mapper(self):
@@ -206,6 +242,7 @@ class App:
         vendor_id = int(config["controller"]["Vendor_ID"], 16)
         if not self.mapper_running:
             try:
+                self.logger.info("开始启动手柄映射")
                 button_states = {
                     "init": self.init_button.cget("state"),
                     "cfg": self.cfg_button.cget("state"),
@@ -216,9 +253,11 @@ class App:
                 self.set_exclusive(True)
                 threading.Thread(target=self._wrap_toggle_mapper, args=(vendor_id, button_states)).start()
             except Exception as e:
+                self.logger.error(f"启动映射时出错: {e}")
                 sys.stdout.write("\n>>> 启动映射时出错: ")
                 handle_exception(e)
         else:
+            self.logger.info("停止手柄映射")
             sys.stdout.write("\n>>> 正在停止手柄映射...")
             self.set_exclusive(False)
             self.mapper.stop()
@@ -233,28 +272,35 @@ class App:
 
     def _wrap_toggle_mapper(self, vendor_id, button_states: dict):
         try:
+            self.logger.debug(f"开始映射包装器，vendor_id: {hex(vendor_id)}")
             if vendor_id == 0x054c:
+                self.logger.info("创建 DualSense 到 DS4 映射器")
                 self.mapper = DualSenseToDS4Mapper()
             elif vendor_id == 0x045e:
+                self.logger.info("创建 Xbox 无线到 X360 映射器")
                 sys.stdout.write("\n>>> 请按下物理手柄上的 A 键进行检测（按 ESC 键取消）...\n")
                 physical_id = detect_controller_by_a()
                 if not physical_id:
+                    self.logger.info("手柄映射已取消")
                     sys.stdout.write("\n>>> 手柄映射已取消。")
                     return
                 self.mapper = XboxWirelessToX360Mapper(physical_id=int(physical_id))
             status = self.mapper.start()
             if status:
+                self.logger.info("手柄映射启动成功")
                 self.mapper_running = True
                 self.mapper_button.config(text="停止手柄映射")
                 self.button.config(state='normal')
                 self.init_button.config(state='disabled')
                 sys.stdout.write("\n>>> 手柄映射已启动。")
             else:
+                self.logger.error("手柄映射启动失败")
                 self.set_exclusive(False)
                 self.mapper.stop()
-                self.set_exclusive(False)
+                self.set_exclusive(False, verbose=False)
                 sys.stdout.write("\n>>> 手柄映射启动失败，请检查设备。")
         except Exception as e:
+            self.logger.error(f"映射包装器出错: {e}")
             self.init_button.config(state=button_states["init"])
             self.mapper_button.config(state=button_states["mapper"])
             self.cfg_button.config(state=button_states["cfg"])
@@ -264,6 +310,7 @@ class App:
 
     def toggle(self):
         if not self.running and self.mapper_running:
+            self.logger.info("启动智慧核心")
             self.running = True
             self.logic_started = False
             sys.stdout.write("\n>>> 正在启动智慧核心...")
@@ -276,6 +323,7 @@ class App:
             # 检测线程是否启动成功
             self.root.after(1000, self._check_logic_started)
         else:
+            self.logger.info("关闭智慧核心")
             self.running = False
             sys.stdout.write("\n>>> 正在关闭智慧核心...")
             self.button.config(text="启动智慧核心")
@@ -285,20 +333,18 @@ class App:
 
     def _logic_wrapper(self):
         try:
+            self.logger.info("开始执行逻辑包装器")
             self.logic_started = True
             self.run_logic()
         except Exception as e:
+            self.logger.error(f"逻辑包装器出错: {e}")
+            self.logger.exception("逻辑包装器异常详情")
             sys.stdout.write("\n>>> 智慧核心启动失败。")
             handle_exception(e)
             self.running = False
             self.root.after(0, self._handle_logic_failure)
         finally:
             self.logic_started = False
-
-    def _handle_logic_failure(self):
-        self.button.config(text="启动智慧核心")
-        self.mapper_button.config(state='normal')
-        self.cfg_button.config(state='normal')
 
     def _check_logic_started(self):
         if not self.running:
@@ -316,6 +362,8 @@ class App:
 
     def run_logic(self):
         try:
+            self.logger.info("开始运行智慧核心逻辑")
+            
             def map_range(x: float, a: float, scale: list[float] = [0.2, 0.8]):
                 normalized = x / a
                 out_min = 127 * scale[0]
@@ -335,19 +383,25 @@ class App:
             curve_inner = config["detect_settings"]["curve"]["inner"]
             curve_outer = config["detect_settings"]["curve"]["outer"]
 
+            self.logger.info(f"加载配置: hipfire_scale={hipfire_scale}, strong_size={strong_size}, weak_size={weak_size}, ident_size={ident_size}")
+
             camera = ScreenGrabber(region=get_screenshot_region_dxcam(ident_size))
             model = APV5Experimental(self.model_path)
+
+            self.logger.info(f"初始化完成: 模型提供者={model.provider}")
 
             sys.stdout.write(f"\n>>> 智慧核心运行中，当前 EP：{model.provider}")
             last_print_time = time.time()
             
             tracking_delay_start = time.perf_counter()
+            cycle_count = 0
+            
             while self.running:
                 cycle_start = time.perf_counter()
+                cycle_count += 1
+                
                 grab_start = time.perf_counter()
                 img = camera.grab_frame()
-                if img is None:
-                    continue
                 grab_end = time.perf_counter()
                 grab_latency = (grab_end - grab_start) * 1000
 
@@ -388,6 +442,10 @@ class App:
                 cycle_end = time.perf_counter()
                 cycle_latency = (cycle_end - cycle_start) * 1000
 
+                # 每1000个周期记录一次性能日志
+                if cycle_count % 1000 == 0:
+                    self.logger.debug(f"性能统计 - 周期: {cycle_count}, 总延迟: {cycle_latency:.2f}ms, 截图: {grab_latency:.2f}ms, 推理: {infer_latency:.2f}ms")
+
                 now = time.time()
                 if now - last_print_time > 1:
                     latency_str = (
@@ -398,21 +456,27 @@ class App:
                     self.root.after(0, self.update_latency_label, latency_str)
                     last_print_time = now
 
+            self.logger.info("智慧核心逻辑正常结束")
             self.mapper.rx_override = None
             self.mapper.ry_override = None
             sys.stdout.write("\n>>> 智慧核心已关闭。")
         except Exception as e:
+            self.logger.error(f"智慧核心运行时出错: {e}")
+            self.logger.exception("智慧核心异常详情")
             sys.stdout.write("\n>>> 智慧核心运行时出错。")
             handle_exception(e)
             self.running = False
             self._handle_logic_failure()
         finally:
+            self.logger.info("清理智慧核心资源")
             camera.stop()
-        
+
     def set_exclusive(self, state: bool, verbose: bool = True):
         if state:
+            self.logger.info("启动手柄独占模式")
             msg = ["\n>>> 正在启动手柄独占，请勿退出...", "\n>>> 手柄独占已启动。", "\n>>> 启动手柄独占时出错: "]
         else:
+            self.logger.info("停止手柄独占模式")
             msg = ["\n>>> 正在停止手柄独占，请勿退出...", "\n>>> 手柄独占已停止。", "\n>>> 停止手柄独占时出错: "]
         button_states = {
             "init": self.init_button.cget("state"),
@@ -436,11 +500,14 @@ class App:
                 sys.stdout.write(msg[1])
             response = True
         except Exception as e:
+            self.logger.error(f"手柄独占操作失败: {e}")
             if verbose:
                 sys.stdout.write(f"{msg[2]}{e}")
                 if str(e) == "CM_Locate_DevNodeW failed: 0x000D":
+                    self.logger.warning("手柄未插入或已更换")
                     sys.stdout.write("\n>>> 请检查手柄是否插入。若您更换了手柄，请重新初始化。")
                 elif str(e) == "CM_Disable_DevNode failed: 0x0017":
+                    self.logger.warning("检测到多个相同的手柄实例")
                     sys.stdout.write("\n>>> 检测到多个相同的手柄实例。")
                 else:
                     handle_exception(e)
@@ -454,14 +521,36 @@ class App:
 
     def on_close(self):
         if messagebox.askyesno("退出", "确定退出吗？"):
+            self.logger.info("用户确认退出程序")
             self.running = False
             self.set_exclusive(state=False, verbose=True)
             if self.mapper:
+                self.logger.info("停止手柄映射")
                 self.mapper.stop()
             self.set_exclusive(state=False, verbose=False)
             self.hidhide.close()
+            
+            # 停止自动日志清理
+            stop_auto_cleanup()
+            
+            self.logger.info("程序正常退出")
             # messagebox.showinfo("调试", "on_close")
             self.root.destroy()
+
+    def _handle_logic_failure(self):
+        self.logger.warning("处理逻辑启动失败")
+        self.button.config(text="启动智慧核心")
+        self.mapper_button.config(state='normal')
+        self.cfg_button.config(state='normal')
+
+    def open_log_viewer(self):
+        """打开日志查看器"""
+        try:
+            self.logger.info("打开日志查看器")
+            open_log_viewer()
+        except Exception as e:
+            self.logger.error(f"打开日志查看器失败: {e}")
+            messagebox.showerror("错误", f"打开日志查看器失败: {e}")
 
 
 if __name__ == "__main__":
