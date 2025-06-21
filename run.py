@@ -402,6 +402,8 @@ class App:
                 
                 grab_start = time.perf_counter()
                 img = camera.grab_frame()
+                if img is None:
+                    continue
                 grab_end = time.perf_counter()
                 grab_latency = (grab_end - grab_start) * 1000
 
