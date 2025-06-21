@@ -20,7 +20,8 @@ from utils.delay_stdout import DelayedStdoutRedirector
 from utils.tools import (
     get_screenshot_region_dxcam, 
     list_subdirs, enum_hid_devices, 
-    handle_exception, detect_controller_by_a, check_xbox_controller_available
+    handle_exception, detect_controller_by_a, check_xbox_controller_available,
+    check_key_pressed
 )
 from utils.logger import get_logger
 from modules.log_viewer import open_log_viewer
@@ -112,8 +113,27 @@ class App:
             "[Latency] screen grab: waiting...\n"
             "[Latency] inference: waiting..."
         )
-        self.latency_label = tk.Label(root, text=self.latency_str, font=("Arial", 10), justify=tk.LEFT)
+        
+        # 延迟信息标签
+        self.latency_label = tk.Label(root, text=self.latency_str, justify=tk.LEFT)
         self.latency_label.pack(side="left", padx=10, pady=(5, 5))
+        
+        # 连点状态显示 - 直接放在root上，靠右
+        repeater_frame = tk.Frame(root)
+        repeater_frame.pack(side="right", padx=10, pady=(5, 5))
+        
+        # 连点状态复选框（不可修改）
+        self.repeater_var = tk.BooleanVar()
+        self.repeater_checkbox = tk.Checkbutton(
+            repeater_frame, 
+            variable=self.repeater_var, 
+            state='disabled',  # 设置为不可修改
+            text="连点开启"
+        )
+        self.repeater_checkbox.pack(side="right")
+        
+        self.repeater_label = tk.Label(repeater_frame, text="按 Home 键切换连点")
+        self.repeater_label.pack(side="right", padx=(0, 5))
 
         if not driver_ready:
             self.logger.warning("驱动未就绪，提示用户下载")
@@ -185,6 +205,10 @@ class App:
 
     def update_latency_label(self, text):
         self.latency_label.config(text=text)
+
+    def update_repeater_status(self, is_enabled):
+        """更新连点状态显示"""
+        self.repeater_var.set(is_enabled)
 
     def open_cfg(self):
         try:
@@ -422,9 +446,8 @@ class App:
             ident_center = ident_size / 2
             curve_inner = config["detect_settings"]["curve"]["inner"]
             curve_outer = config["detect_settings"]["curve"]["outer"]
-            repeater = config["detect_settings"]["repeater"]
 
-            self.logger.info(f"加载配置: hipfire_scale={hipfire_scale}, strong_size={strong_size}, weak_size={weak_size}, ident_size={ident_size}, repeater={repeater}")
+            self.logger.info(f"加载配置: hipfire_scale={hipfire_scale}, strong_size={strong_size}, weak_size={weak_size}, ident_size={ident_size}")
 
             camera = ScreenGrabber(region=get_screenshot_region_dxcam(ident_size))
             model = APV5Experimental(self.model_path)
@@ -433,7 +456,15 @@ class App:
 
             sys.stdout.write(f"\n>>> 智慧核心运行中，当前 EP：{model.provider}")
             last_print_time = time.time()
-                        
+            
+            # Home键虚拟键码
+            VK_HOME = 0x24
+            repeater = 0  # 初始值为0
+            home_key_prev_state = False  # 记录上一帧Home键的状态
+            
+            # 初始化连点状态显示
+            self.root.after(0, self.update_repeater_status, False)
+
             while self.running:
                 cycle_start = time.perf_counter()
                 
@@ -452,6 +483,14 @@ class App:
                 # 获取当前扳机值
                 trigger_values = self.mapper.get_trigger_values()
                 rt_trigger = trigger_values[1]  # 右扳机值
+
+                # 检测Home键状态并处理切换逻辑
+                home_pressed = check_key_pressed(VK_HOME)
+                if home_pressed and not home_key_prev_state:  # Home键刚被按下
+                    repeater = 1 if repeater == 0 else 0  # 在0和1之间切换
+                    # 更新UI显示
+                    self.root.after(0, self.update_repeater_status, repeater == 1)
+                home_key_prev_state = home_pressed
 
                 # 连点 RT 逻辑
                 if repeater == 1 and rt_trigger > 128:
@@ -500,12 +539,16 @@ class App:
             self.logger.info("智慧核心逻辑正常结束")
             self.mapper.rx_override = None
             self.mapper.ry_override = None
+            # 重置连点状态显示
+            self.root.after(0, self.update_repeater_status, False)
             sys.stdout.write("\n>>> 智慧核心已关闭。")
         except Exception as e:
             self.logger.error(f"智慧核心运行时出错: {e}")
             self.logger.exception("智慧核心异常详情")
             sys.stdout.write("\n>>> 智慧核心运行时出错。")
             handle_exception(e)
+            # 重置连点状态显示
+            self.root.after(0, self.update_repeater_status, False)
             self.running = False
             self._handle_logic_failure()
         finally:

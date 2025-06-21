@@ -122,17 +122,6 @@ class CFGApp:
         self.hipfire_var = tk.StringVar(value=str(self.config["detect_settings"]["hipfire_scale"]))  # 默认值0.5
         self.hipfire_entry = tk.Entry(self.bottom_frame, textvariable=self.hipfire_var, width=4, validate='key', validatecommand=vcmd_float)
         self.hipfire_entry.pack(side='left', padx=10)
-
-        # 修复 repeater 复选框 - 保存变量为实例变量
-        self.repeater_var = tk.IntVar(value=self.config["detect_settings"]["repeater"])
-        repeater = tk.Checkbutton(
-            self.bottom_frame,
-            text="连点",
-            variable=self.repeater_var,
-            onvalue=1,     # 选中时变量的值
-            offvalue=0     # 取消选中时变量的值
-        )
-        repeater.pack(side='left', padx=10)
         
         # 完成按钮
         self.done_button = tk.Button(self.bottom_frame, text="完成", command=self.on_done, width=10)
@@ -264,7 +253,6 @@ class CFGApp:
         self.config["detect_settings"]["range"]["middle"] = self.valid_ranges['weak']
         self.config["detect_settings"]["range"]["inner"] = self.valid_ranges['strong']
         self.config["detect_settings"]["hipfire_scale"] = float(self.hipfire_var.get())
-        self.config["detect_settings"]["repeater"] = self.repeater_var.get()
         with open('user_config.json', 'w') as f:
             json.dump(self.config, f, indent=4)
         self.force_quit = False

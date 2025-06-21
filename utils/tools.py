@@ -15,14 +15,12 @@ def detect_controller_by_a():
     """
     等待用户按下物理手柄的 A 键，返回该手柄的索引 (0–3)。
     """
-    # 加载 user32.dll
-    _user32 = ctypes.windll.user32
     VK_ESCAPE = 0x1B
     start_time = time.time()
     timeout = 30  # 30秒超时
     
     while time.time() - start_time < timeout:
-        if bool(_user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000):
+        if check_key_pressed(VK_ESCAPE):
             return False
         
         for i in range(4):
@@ -142,6 +140,24 @@ def check_xbox_controller_available(controller_id: int) -> bool:
             return False
         return True
     except Exception:
+        return False
+
+def check_key_pressed(virtual_key_code):
+    """
+    检查指定虚拟键码的按键是否被按下
+    
+    Args:
+        virtual_key_code (int): 虚拟键码，如 0x24 (Home键), 0x1B (ESC键)
+    
+    Returns:
+        bool: 如果按键被按下返回True，否则返回False
+    """
+    try:
+        _user32 = ctypes.windll.user32
+        return bool(_user32.GetAsyncKeyState(virtual_key_code) & 0x8000)
+    except Exception as e:
+        logger = get_logger()
+        logger.debug(f"键盘检测异常: {e}")
         return False
 
 if __name__ == "__main__":
