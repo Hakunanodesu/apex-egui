@@ -27,6 +27,7 @@ from sdl2 import (
 )
 
 from utils.tools import handle_exception, median_of_three
+from utils.logger import get_logger
 
 
 class XboxWirelessToX360Mapper:
@@ -59,6 +60,7 @@ class XboxWirelessToX360Mapper:
         self._thread = None
         self.phys_id = physical_id
         self.vpad = None
+        self._lock = threading.Lock()  # 添加线程锁
 
         # 新增：右摇杆偏移量（单位与 XInput 原始值相同，signed 16-bit）
         self.rx_offset = 0
@@ -69,85 +71,125 @@ class XboxWirelessToX360Mapper:
         读取并返回当前左右扳机值 (0–255)。
         若读取失败，则返回 (0, 0)。
         """
-        s = XInput.get_state(self.phys_id).Gamepad
-        return s.bLeftTrigger, s.bRightTrigger
+        try:
+            with self._lock:
+                state = XInput.get_state(self.phys_id)
+                if state is None or state.Gamepad is None:
+                    return 0, 0
+                s = state.Gamepad
+                return s.bLeftTrigger, s.bRightTrigger
+        except Exception as e:
+            # 记录异常但不抛出
+            logger = get_logger()
+            logger.debug(f"获取扳机值异常: {e}")
+            return 0, 0
     
     def add_rx_ry_offset(self, rx_offset: int, ry_offset: int):
         """
         设置右摇杆 X/Y 轴的偏移值。
           - rx_offset, ry_offset: 要应用的偏移（signed 16-bit）
-          - accumulate: True 时在现有偏移上累加，否则覆盖
         """
-        self.rx_offset = int(rx_offset * 255)
-        self.ry_offset = -int(ry_offset * 255)
+        with self._lock:
+            self.rx_offset = int(rx_offset * 255)
+            self.ry_offset = -int(ry_offset * 255)
 
     def _map_loop(self):
         """
         后台线程函数：不断读取物理手柄状态并映射到虚拟 360 手柄。
         """
+        consecutive_errors = 0
+        max_consecutive_errors = 10
+        
         while not self._stop.is_set():
-            s = XInput.get_state(self.phys_id).Gamepad
+            try:
+                with self._lock:
+                    state = XInput.get_state(self.phys_id)
+                    if state is None or state.Gamepad is None:
+                        consecutive_errors += 1
+                        if consecutive_errors > max_consecutive_errors:
+                            break
+                        time.sleep(self.interval)
+                        continue
+                    
+                    s = state.Gamepad
+                    consecutive_errors = 0  # 重置错误计数
 
-            # —— 摇杆 ——  
-            self.vpad.left_joystick(x_value=s.sThumbLX, y_value=s.sThumbLY)
+                # —— 摇杆 ——  
+                self.vpad.left_joystick(x_value=s.sThumbLX, y_value=s.sThumbLY)
 
-            # —— 右摇杆（加偏移 & 截断到 signed 16-bit）——  
-            rx = s.sThumbRX + self.rx_offset
-            ry = s.sThumbRY + self.ry_offset
-            # 截断范围 -32768..32767
-            rx = median_of_three(rx, 32767, -32768)
-            ry = median_of_three(ry, 32767, -32768)
-            self.vpad.right_joystick(x_value=rx, y_value=ry)
+                # —— 右摇杆（加偏移 & 截断到 signed 16-bit）——  
+                rx = s.sThumbRX + self.rx_offset
+                ry = s.sThumbRY + self.ry_offset
+                # 截断范围 -32768..32767
+                rx = median_of_three(rx, 32767, -32768)
+                ry = median_of_three(ry, 32767, -32768)
+                self.vpad.right_joystick(x_value=rx, y_value=ry)
 
-            # —— 扳机 ——  
-            self.vpad.left_trigger(value=s.bLeftTrigger)
-            self.vpad.right_trigger(value=s.bRightTrigger)
+                # —— 扳机 ——  
+                self.vpad.left_trigger(value=s.bLeftTrigger)
+                self.vpad.right_trigger(value=s.bRightTrigger)
 
-            # —— 主按钮 ——  
-            for mask, btn in [
-                (self.XINPUT_GAMEPAD_A, vg.XUSB_BUTTON.XUSB_GAMEPAD_A),
-                (self.XINPUT_GAMEPAD_B, vg.XUSB_BUTTON.XUSB_GAMEPAD_B),
-                (self.XINPUT_GAMEPAD_X, vg.XUSB_BUTTON.XUSB_GAMEPAD_X),
-                (self.XINPUT_GAMEPAD_Y, vg.XUSB_BUTTON.XUSB_GAMEPAD_Y),
-            ]:
-                if s.wButtons & mask:
-                    self.vpad.press_button(button=btn)
-                else:
-                    self.vpad.release_button(button=btn)
+                # —— 主按钮 ——  
+                for mask, btn in [
+                    (self.XINPUT_GAMEPAD_A, vg.XUSB_BUTTON.XUSB_GAMEPAD_A),
+                    (self.XINPUT_GAMEPAD_B, vg.XUSB_BUTTON.XUSB_GAMEPAD_B),
+                    (self.XINPUT_GAMEPAD_X, vg.XUSB_BUTTON.XUSB_GAMEPAD_X),
+                    (self.XINPUT_GAMEPAD_Y, vg.XUSB_BUTTON.XUSB_GAMEPAD_Y),
+                ]:
+                    if s.wButtons & mask:
+                        self.vpad.press_button(button=btn)
+                    else:
+                        self.vpad.release_button(button=btn)
 
-            # —— 其他按钮 ——  
-            for mask, btn in [
-                (self.XINPUT_GAMEPAD_LEFT_SHOULDER, vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER),
-                (self.XINPUT_GAMEPAD_RIGHT_SHOULDER, vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER),
-                (self.XINPUT_GAMEPAD_BACK,           vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK),
-                (self.XINPUT_GAMEPAD_START,          vg.XUSB_BUTTON.XUSB_GAMEPAD_START),
-                (self.XINPUT_GAMEPAD_LEFT_THUMB,     vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB),
-                (self.XINPUT_GAMEPAD_RIGHT_THUMB,    vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB),
-                (self.XINPUT_GAMEPAD_GUIDE,          vg.XUSB_BUTTON.XUSB_GAMEPAD_GUIDE),
-                (self.XINPUT_GAMEPAD_DPAD_UP,    vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP),
-                (self.XINPUT_GAMEPAD_DPAD_RIGHT, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT),
-                (self.XINPUT_GAMEPAD_DPAD_DOWN,  vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN),
-                (self.XINPUT_GAMEPAD_DPAD_LEFT,  vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT),
-            ]:
-                if s.wButtons & mask:
-                    self.vpad.press_button(button=btn)
-                else:
-                    self.vpad.release_button(button=btn)
+                # —— 其他按钮 ——  
+                for mask, btn in [
+                    (self.XINPUT_GAMEPAD_LEFT_SHOULDER, vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER),
+                    (self.XINPUT_GAMEPAD_RIGHT_SHOULDER, vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER),
+                    (self.XINPUT_GAMEPAD_BACK,           vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK),
+                    (self.XINPUT_GAMEPAD_START,          vg.XUSB_BUTTON.XUSB_GAMEPAD_START),
+                    (self.XINPUT_GAMEPAD_LEFT_THUMB,     vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB),
+                    (self.XINPUT_GAMEPAD_RIGHT_THUMB,    vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB),
+                    (self.XINPUT_GAMEPAD_GUIDE,          vg.XUSB_BUTTON.XUSB_GAMEPAD_GUIDE),
+                    (self.XINPUT_GAMEPAD_DPAD_UP,    vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP),
+                    (self.XINPUT_GAMEPAD_DPAD_RIGHT, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT),
+                    (self.XINPUT_GAMEPAD_DPAD_DOWN,  vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN),
+                    (self.XINPUT_GAMEPAD_DPAD_LEFT,  vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT),
+                ]:
+                    if s.wButtons & mask:
+                        self.vpad.press_button(button=btn)
+                    else:
+                        self.vpad.release_button(button=btn)
 
-            self.vpad.update()
+                self.vpad.update()
+                
+            except Exception as e:
+                consecutive_errors += 1
+                logger = get_logger()
+                logger.debug(f"映射循环异常: {e}")
+                if consecutive_errors > max_consecutive_errors:
+                    logger.error(f"连续错误过多，停止映射循环: {e}")
+                    break
+                time.sleep(self.interval)
+                continue
+                
             time.sleep(self.interval)
 
     def start(self):
         """
         检测手柄并启动映射：创建虚拟手柄、启动线程。
         """
-        # 创建虚拟手柄实例
-        self.vpad = vg.VX360Gamepad()
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._map_loop, daemon=True)
-        self._thread.start()
-        sys.stdout.write(f">>> {self.controller_name} → 虚拟 Xbox 360")
-        return True
+        try:
+            # 创建虚拟手柄实例
+            self.vpad = vg.VX360Gamepad()
+            self._stop.clear()
+            self._thread = threading.Thread(target=self._map_loop, daemon=True)
+            self._thread.start()
+            sys.stdout.write(f">>> {self.controller_name} → 虚拟 Xbox 360")
+            return True
+        except Exception as e:
+            logger = get_logger()
+            logger.error(f"启动Xbox映射器失败: {e}")
+            return False
 
     def stop(self):
         """
@@ -155,11 +197,15 @@ class XboxWirelessToX360Mapper:
         """
         self._stop.set()
         if self._thread:
-            self._thread.join()
+            try:
+                self._thread.join(timeout=2.0)  # 添加超时
+            except Exception:
+                pass
         # 删除虚拟手柄对象，触发其析构方法以移除设备
         try:
-            del self.vpad
-        except AttributeError:
+            if self.vpad:
+                del self.vpad
+        except Exception:
             pass
         self.vpad = None
 

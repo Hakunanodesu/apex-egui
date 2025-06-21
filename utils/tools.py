@@ -18,19 +18,45 @@ def detect_controller_by_a():
     # 加载 user32.dll
     _user32 = ctypes.windll.user32
     VK_ESCAPE = 0x1B
-    while True:
+    start_time = time.time()
+    timeout = 30  # 30秒超时
+    
+    while time.time() - start_time < timeout:
         if bool(_user32.GetAsyncKeyState(VK_ESCAPE) & 0x8000):
             return False
+        
         for i in range(4):
             try:
-                state = XInput.get_state(i).Gamepad
-            except Exception:
+                # 添加更安全的XInput调用
+                state = XInput.get_state(i)
+                if state is None:
+                    continue
+                gamepad = state.Gamepad
+                if gamepad is None:
+                    continue
+                    
+                if (gamepad.wButtons & 0x1000) != 0:
+                    # 等待按键释放
+                    while True:
+                        try:
+                            current_state = XInput.get_state(i)
+                            if current_state is None or current_state.Gamepad is None:
+                                break
+                            if (current_state.Gamepad.wButtons & 0x1000) == 0:
+                                break
+                            time.sleep(0.005)
+                        except Exception:
+                            break
+                    return f"{i}"
+            except Exception as e:
+                # 记录异常但不中断循环
+                logger = get_logger()
+                logger.debug(f"XInput检测异常 (控制器 {i}): {e}")
                 continue
-            if (state.wButtons & 0x1000) != 0:
-                while (XInput.get_state(i).Gamepad.wButtons & 0x1000) != 0:
-                    time.sleep(0.005)
-                return f"{i}"
         time.sleep(0.005)
+    
+    # 超时返回False
+    return False
 
 def handle_exception(e):
     """处理异常并记录到日志"""
@@ -104,6 +130,17 @@ def median_of_three(x, max, min): # 比min，max嵌套函数更快
     else:
         return x
     
+def check_xbox_controller_available(controller_id: int) -> bool:
+    """
+    检查指定ID的Xbox手柄是否可用
+    """
+    try:
+        state = XInput.get_state(controller_id)
+        if state is None or state.Gamepad is None:
+            return False
+        return True
+    except Exception:
+        return False
 
 if __name__ == "__main__":
     for dev in enum_hid_devices():

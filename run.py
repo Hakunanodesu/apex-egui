@@ -20,7 +20,7 @@ from utils.delay_stdout import DelayedStdoutRedirector
 from utils.tools import (
     get_screenshot_region_dxcam, 
     list_subdirs, enum_hid_devices, 
-    handle_exception, detect_controller_by_a
+    handle_exception, detect_controller_by_a, check_xbox_controller_available
 )
 from utils.logger import get_logger
 from modules.log_viewer import open_log_viewer
@@ -279,26 +279,66 @@ class App:
             elif vendor_id == 0x045e:
                 self.logger.info("创建 Xbox 无线到 X360 映射器")
                 sys.stdout.write("\n>>> 请按下物理手柄上的 A 键进行检测（按 ESC 键取消）...\n")
-                physical_id = detect_controller_by_a()
-                if not physical_id:
-                    self.logger.info("手柄映射已取消")
-                    sys.stdout.write("\n>>> 手柄映射已取消。")
+                
+                # 添加更安全的手柄检测
+                try:
+                    physical_id = detect_controller_by_a()
+                    if not physical_id:
+                        self.logger.info("手柄映射已取消")
+                        sys.stdout.write("\n>>> 手柄映射已取消。")
+                        return
+                    self.logger.info(f"检测到物理手柄ID: {physical_id}")
+                    
+                    # 验证手柄是否可用
+                    if not check_xbox_controller_available(int(physical_id)):
+                        self.logger.error(f"手柄 {physical_id} 不可用")
+                        sys.stdout.write("\n>>> 检测到的手柄不可用，请检查连接。")
+                        return
+                        
+                except Exception as e:
+                    self.logger.error(f"手柄检测失败: {e}")
+                    sys.stdout.write("\n>>> 手柄检测失败，请检查手柄连接。")
                     return
-                self.mapper = XboxWirelessToX360Mapper(physical_id=int(physical_id))
-            status = self.mapper.start()
-            if status:
-                self.logger.info("手柄映射启动成功")
-                self.mapper_running = True
-                self.mapper_button.config(text="停止手柄映射")
-                self.button.config(state='normal')
-                self.init_button.config(state='disabled')
-                sys.stdout.write("\n>>> 手柄映射已启动。")
+                
+                try:
+                    self.mapper = XboxWirelessToX360Mapper(physical_id=int(physical_id))
+                except Exception as e:
+                    self.logger.error(f"创建Xbox映射器失败: {e}")
+                    sys.stdout.write("\n>>> 创建手柄映射器失败，请检查驱动。")
+                    return
             else:
-                self.logger.error("手柄映射启动失败")
+                self.logger.error(f"不支持的手柄类型: {hex(vendor_id)}")
+                sys.stdout.write("\n>>> 不支持的手柄类型。")
+                return
+                
+            # 启动映射器
+            try:
+                status = self.mapper.start()
+                if status:
+                    self.logger.info("手柄映射启动成功")
+                    self.mapper_running = True
+                    self.mapper_button.config(text="停止手柄映射")
+                    self.button.config(state='normal')
+                    self.init_button.config(state='disabled')
+                    sys.stdout.write("\n>>> 手柄映射已启动。")
+                else:
+                    self.logger.error("手柄映射启动失败")
+                    self.set_exclusive(False)
+                    if self.mapper:
+                        self.mapper.stop()
+                    self.set_exclusive(False, verbose=False)
+                    sys.stdout.write("\n>>> 手柄映射启动失败，请检查设备。")
+            except Exception as e:
+                self.logger.error(f"启动映射器时出错: {e}")
                 self.set_exclusive(False)
-                self.mapper.stop()
+                if self.mapper:
+                    try:
+                        self.mapper.stop()
+                    except Exception:
+                        pass
                 self.set_exclusive(False, verbose=False)
-                sys.stdout.write("\n>>> 手柄映射启动失败，请检查设备。")
+                sys.stdout.write("\n>>> 启动映射器时出错，请检查设备。")
+                
         except Exception as e:
             self.logger.error(f"映射包装器出错: {e}")
             self.init_button.config(state=button_states["init"])
@@ -438,8 +478,7 @@ class App:
                     if self.mapper.get_trigger_values()[1] > 128:
                         tracking_delay_start = time.perf_counter()
                 else:
-                    self.mapper.rx_offset = 0
-                    self.mapper.ry_offset = 0
+                    self.mapper.add_rx_ry_offset(0, 0)
 
                 cycle_end = time.perf_counter()
                 cycle_latency = (cycle_end - cycle_start) * 1000
@@ -522,22 +561,41 @@ class App:
             return response
 
     def on_close(self):
-        if messagebox.askyesno("退出", "确定退出吗？"):
+        try:
             self.logger.info("用户确认退出程序")
-            self.running = False
-            self.set_exclusive(state=False, verbose=True)
-            if self.mapper:
-                self.logger.info("停止手柄映射")
-                self.mapper.stop()
-            self.set_exclusive(state=False, verbose=False)
-            self.hidhide.close()
+            # 停止智慧核心
+            if self.running:
+                self.running = False
+                self.logger.info("智慧核心逻辑正常结束")
+                sys.stdout.write("\n>>> 智慧核心已关闭。")
+            
+            # 停止手柄映射
+            if self.mapper_running and self.mapper:
+                try:
+                    self.logger.info("停止手柄映射")
+                    self.set_exclusive(False)
+                    self.mapper.stop()
+                    self.mapper_running = False
+                    self.set_exclusive(False, verbose=False)
+                    sys.stdout.write("\n>>> 手柄映射已停止。")
+                except Exception as e:
+                    self.logger.error(f"停止手柄映射时出错: {e}")
             
             # 停止自动日志清理
             stop_auto_cleanup()
             
+            # 恢复标准输出
+            sys.stdout = sys.__stdout__
+            
             self.logger.info("程序正常退出")
-            # messagebox.showinfo("调试", "on_close")
             self.root.destroy()
+            
+        except Exception as e:
+            self.logger.error(f"程序关闭时出错: {e}")
+            try:
+                self.root.destroy()
+            except:
+                pass
 
     def _handle_logic_failure(self):
         self.logger.warning("处理逻辑启动失败")
