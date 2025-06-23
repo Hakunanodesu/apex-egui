@@ -1,8 +1,8 @@
-# TargetDetect-for-Controller
+# Assisted Pursuit with Effortless eXecution
 
 ## 项目概述
 
-一个基于深度学习的实时目标检测系统，集成了 YOLO 目标检测模型、ONNXRUNTIME 加速和手柄控制映射功能。该项目能够通过屏幕截图进行目标检测和追踪，并将手柄输入映射到虚拟 Xbox 360/DualShock 4 手柄，实现自动化控制。
+A.P.E.X.，又称 Assisted Pursuit with Effortless eXecution，一个基于深度学习的实时目标检测系统，集成了 YOLO 目标检测模型、ONNXRUNTIME 加速和手柄控制映射功能。该项目能够通过屏幕截图进行目标检测和追踪，并将手柄输入映射到虚拟 Xbox 360/DualShock 4 手柄，实现自动化控制。
 
 ## 主要特性
 
