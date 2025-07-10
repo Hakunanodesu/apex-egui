@@ -461,6 +461,172 @@ class DualSenseToDS4Mapper:
                 pass
             self.virtual_gamepad = None
 
+class DualSenseToXboxMapper:
+    """
+    使用 SDL2 读取 DualSense 控制器输入，并映射到虚拟 Xbox 360 手柄 (vgamepad)
+    """
+
+    def __init__(self):
+        # 读取配置
+        with open("user_config.json", "r") as f:
+            config = json.load(f)
+        self.vendor_id = 0x054C
+        self.product_id = int(config["controller"]["Product_ID"], 16)
+        self.controller_name = config["controller"]["Name"]
+        self.poll_interval = 0.002
+
+        self._sdl_controller = None
+        self._mapping_thread = None
+        self._stop_event = threading.Event()
+        self.virtual_gamepad = vg.VX360Gamepad()
+        self._sdl_inited = False
+
+        # 右摇杆偏移
+        self.rx_offset = 0
+        self.ry_offset = 0
+
+        # RT 连点
+        self.rt_repeat_enabled = False
+        self.rt_repeat_state = False
+        self.rt_repeat_timer = 0
+        self.rt_repeat_interval = RT_REPEAT_INTERVAL
+
+    def _init_sdl(self) -> bool:
+        if not self._sdl_inited:
+            if SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER) != 0:
+                sys.stdout.write("SDL_Init Error: failed to initialize GameController\n")
+                return False
+            self._sdl_inited = True
+        SDL_PumpEvents()
+        # 查找并打开手柄
+        count = SDL_NumJoysticks()
+        for idx in range(count):
+            if SDL_IsGameController(idx):
+                vid = SDL_JoystickGetDeviceVendor(idx)
+                pid = SDL_JoystickGetDeviceProduct(idx)
+                if vid == self.vendor_id and pid == self.product_id:
+                    if self._sdl_controller:
+                        SDL_GameControllerClose(self._sdl_controller)
+                    self._sdl_controller = SDL_GameControllerOpen(idx)
+                    sys.stdout.write(f">>> {self.controller_name} → 虚拟 Xbox 360 手柄\n")
+                    return True
+        sys.stdout.write(f"\n>>> 未找到 VID=0x{self.vendor_id:04X}, PID=0x{self.product_id:04X} 的手柄\n")
+        return False
+
+    def add_rx_ry_offset(self, rx_offset: int, ry_offset: int):
+        self.rx_offset = int(rx_offset)
+        self.ry_offset = int(ry_offset)
+
+    def _axis_to_byte_signed(self, val):
+        return (val + 32768) * 255 // 65535
+
+    def _axis_to_byte_trigger(self, val):
+        return val * 255 // 32767
+
+    def set_rt_repeat(self, enabled: bool):
+        self.rt_repeat_enabled = enabled
+        if not enabled:
+            self.rt_repeat_state = False
+            self.rt_repeat_timer = 0
+
+    def _map_to_xbox(self):
+        # 刷新 SDL 事件
+        SDL_PumpEvents()
+
+        # 左摇杆
+        lx = self._axis_to_byte_signed(SDL_GameControllerGetAxis(self._sdl_controller, SDL_CONTROLLER_AXIS_LEFTX))
+        ly = self._axis_to_byte_signed(SDL_GameControllerGetAxis(self._sdl_controller, SDL_CONTROLLER_AXIS_LEFTY))
+        self.virtual_gamepad.left_joystick(x_value=lx, y_value=ly)
+
+        # 右摇杆
+        rx = self._axis_to_byte_signed(SDL_GameControllerGetAxis(self._sdl_controller, SDL_CONTROLLER_AXIS_RIGHTX)) + self.rx_offset
+        ry = self._axis_to_byte_signed(SDL_GameControllerGetAxis(self._sdl_controller, SDL_CONTROLLER_AXIS_RIGHTY)) + self.ry_offset
+        rx = median_of_three(rx, 255, 0)
+        ry = median_of_three(ry, 255, 0)
+        self.virtual_gamepad.right_joystick(x_value=rx, y_value=ry)
+
+        # 扳机
+        lt = self._axis_to_byte_trigger(SDL_GameControllerGetAxis(self._sdl_controller, SDL_CONTROLLER_AXIS_TRIGGERLEFT))
+        self.virtual_gamepad.left_trigger(lt)
+
+        # RT 连点或正常
+        if self.rt_repeat_enabled:
+            now = time.time()
+            if now - self.rt_repeat_timer >= self.rt_repeat_interval:
+                self.rt_repeat_state = not self.rt_repeat_state
+                self.rt_repeat_timer = now
+            self.virtual_gamepad.right_trigger(255 if self.rt_repeat_state else 0)
+        else:
+            rt = self._axis_to_byte_trigger(SDL_GameControllerGetAxis(self._sdl_controller, SDL_CONTROLLER_AXIS_TRIGGERRIGHT))
+            self.virtual_gamepad.right_trigger(rt)
+
+        # 按钮映射
+        btn_map = [
+            (SDL_CONTROLLER_BUTTON_A, vg.XUSB_BUTTON.XUSB_GAMEPAD_A),
+            (SDL_CONTROLLER_BUTTON_B, vg.XUSB_BUTTON.XUSB_GAMEPAD_B),
+            (SDL_CONTROLLER_BUTTON_X, vg.XUSB_BUTTON.XUSB_GAMEPAD_X),
+            (SDL_CONTROLLER_BUTTON_Y, vg.XUSB_BUTTON.XUSB_GAMEPAD_Y),
+            (SDL_CONTROLLER_BUTTON_LEFTSHOULDER, vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER),
+            (SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER),
+            (SDL_CONTROLLER_BUTTON_BACK, vg.XUSB_BUTTON.XUSB_GAMEPAD_BACK),
+            (SDL_CONTROLLER_BUTTON_START, vg.XUSB_BUTTON.XUSB_GAMEPAD_START),
+            (SDL_CONTROLLER_BUTTON_LEFTSTICK, vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_THUMB),
+            (SDL_CONTROLLER_BUTTON_RIGHTSTICK, vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_THUMB)
+        ]
+        for sdl_btn, xbox_btn in btn_map:
+            if SDL_GameControllerGetButton(self._sdl_controller, sdl_btn):
+                self.virtual_gamepad.press_button(xbox_btn)
+            else:
+                self.virtual_gamepad.release_button(xbox_btn)
+
+        # D-Pad
+        for sdl_dir, xbox_dir in [
+            (SDL_CONTROLLER_BUTTON_DPAD_UP, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_UP),
+            (SDL_CONTROLLER_BUTTON_DPAD_RIGHT, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_RIGHT),
+            (SDL_CONTROLLER_BUTTON_DPAD_DOWN, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_DOWN),
+            (SDL_CONTROLLER_BUTTON_DPAD_LEFT, vg.XUSB_BUTTON.XUSB_GAMEPAD_DPAD_LEFT)
+        ]:
+            if SDL_GameControllerGetButton(self._sdl_controller, sdl_dir):
+                self.virtual_gamepad.press_button(xbox_dir)
+            else:
+                self.virtual_gamepad.release_button(xbox_dir)
+
+        # 更新状态
+        self.virtual_gamepad.update()
+
+    def start(self) -> bool:
+        if not self._init_sdl():
+            return False
+        self._stop_event.clear()
+
+        def loop():
+            try:
+                while not self._stop_event.is_set():
+                    self._map_to_xbox()
+                    time.sleep(self.poll_interval)
+            except Exception as e:
+                sys.stdout.write(">>> 映射循环遇到异常：\n")
+                handle_exception(e)
+
+        self._mapping_thread = threading.Thread(target=loop, daemon=True)
+        self._mapping_thread.start()
+        return True
+
+    def stop(self):
+        self._stop_event.set()
+        if self._mapping_thread:
+            self._mapping_thread.join(timeout=0)
+        self._cleanup()
+
+    def _cleanup(self):
+        if self._sdl_controller:
+            SDL_GameControllerClose(self._sdl_controller)
+            self._sdl_controller = None
+        if self._sdl_inited:
+            SDL_Quit()
+            self._sdl_inited = False
+        self.virtual_gamepad = None
+
 
 if __name__ == "__main__":
     # mapper = DualSenseToDS4Mapper(vendor_id=0x054C, product_id=0x0DF2)

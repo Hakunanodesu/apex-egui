@@ -12,7 +12,7 @@ import numpy as np
 from modules.device_replug import DeviceReplugCM
 from modules.hidhide import HidHideController
 from modules.onnx import APV5Experimental
-from modules.controller import DualSenseToDS4Mapper, XboxWirelessToX360Mapper
+from modules.controller import DualSenseToDS4Mapper, XboxWirelessToX360Mapper, DualSenseToXboxMapper
 from modules.initialize import InitApp
 from modules.aim_configurate import CFGApp
 from utils.grab_screen import ScreenGrabber

@@ -161,7 +161,7 @@ def check_key_pressed(virtual_key_code):
         return False
 
 if __name__ == "__main__":
-    # for dev in enum_hid_devices():
-    #     if dev[1] in ("0x54c", "0x45e"):
-    #         print(dev)
-    print(list_subdirs("C:/Program Files/Nefarius Software Solutions"))
+    for dev in enum_hid_devices():
+        if dev[1] in ("0x54c", "0x45e"):
+            print(dev)
+    # print(list_subdirs("C:/Program Files/Nefarius Software Solutions"))
