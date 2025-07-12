@@ -8,11 +8,8 @@
 *.onnx
 
 # 忽略项目文件
-dependencies/
 user_config.json
 test*
-build.bat
-gitpush.bat
 
 # 忽略日志文件
 logs/

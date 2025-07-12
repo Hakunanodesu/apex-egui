@@ -1,0 +1,19 @@
+nuitka run.py ^
+  --standalone ^
+  --onefile ^
+  --lto=yes ^
+  --remove-output ^
+  --enable-plugin=tk-inter ^
+  --include-package=vgamepad ^
+  --include-package=numpy ^
+  --include-package-data=numpy ^
+  --nofollow-import-to=numpy.conftest ^
+  --include-package=cv2 ^
+  --include-package-data=cv2 ^
+  --include-package=pywinusb ^
+  --include-package=sdl2 ^
+  --include-package-data=sdl2 ^
+  --include-data-files="dependencies\apv5.onnx=dependencies\apv5.onnx" ^
+  --include-data-files="dependencies\ViGEmClient.dll=vgamepad\win\vigem\client\x64\ViGEmClient.dll" ^
+  --output-dir="C:\Users\white\temp" ^
+  --windows-console-mode=disable
