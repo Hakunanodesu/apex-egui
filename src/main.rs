@@ -403,6 +403,11 @@ fn main() -> eframe::Result {
                                 } else {
                                     do_resize = true;
                                     on_top = false;
+                                    ctx.send_viewport_cmd(
+                                        ViewportCommand::WindowLevel(
+                                            WindowLevel::Normal
+                                        )
+                                    );
                                     last_log = "关闭识别内容预览".to_owned();
                                 }
                             }
