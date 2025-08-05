@@ -43,10 +43,7 @@ use crate::modules::{
 
 fn main() -> eframe::Result {
     // 初始化控制台错误重定向
-    let _console_redirector = ConsoleRedirector::init().unwrap_or_else(|e| {
-        eprintln!("初始化控制台重定向失败: {}", e);
-        panic!("无法初始化控制台重定向");
-    });
+    let _console_redirector = ConsoleRedirector::init().unwrap();
     
     // 添加白名单 & 启动屏蔽 & 重枚举
     run_hidhidecli(&["--app-reg", get_exe_path().unwrap().to_str().unwrap()]).unwrap();
@@ -66,6 +63,7 @@ fn main() -> eframe::Result {
     let vg_client = Arc::new(Client::connect().unwrap());
     let mut con_reader: Option<ConReader> = None;
     let mut con_mapper: Option<ConMapper> = None;
+    let mut allow_mapping = true;
     let mut mapping_active = false; // 映射状态
     let mut show_config = false;
     let mut screen_capturer: Option<ScreenCapturer> = None;
@@ -80,8 +78,9 @@ fn main() -> eframe::Result {
     let outer_str = Arc::new(Mutex::new(user_config.outer_str));
     let mid_str = Arc::new(Mutex::new(user_config.mid_str));
     let inner_str = Arc::new(Mutex::new(user_config.inner_str));
-    let deadzone = Arc::new(Mutex::new(user_config.deadzone.unwrap_or_else(|| "0.0".to_string())));
-    let hipfire = Arc::new(Mutex::new(user_config.hipfire.unwrap_or_else(|| "0.0".to_string())));
+    let deadzone = Arc::new(Mutex::new(user_config.deadzone));
+    let hipfire = Arc::new(Mutex::new(user_config.hipfire));
+    let reverse_coef = Arc::new(Mutex::new(user_config.reverse_coef));
     // =========================
 
     // 为保存配置克隆变量
@@ -93,6 +92,7 @@ fn main() -> eframe::Result {
     let inner_str_for_save = inner_str.clone();
     let deadzone_for_save = deadzone.clone();
     let hipfire_for_save = hipfire.clone();
+    let reverse_coef_for_save = reverse_coef.clone();
 
     let mut last_log = String::from("初始化成功"); // 仅保留最新一条日志
     let mut do_resize = true;
@@ -272,7 +272,7 @@ fn main() -> eframe::Result {
             
                         // —— 第四行：智能映射 开关 —— 
                         ui.label("智能映射");
-                        ui.add_enabled_ui(!con_names.is_empty() && !installing, |ui| {
+                        ui.add_enabled_ui(!con_names.is_empty() && !installing && allow_mapping, |ui| {
                             if ui.add(toggle_switch(&mut mapping_active)).clicked() {
                                 if mapping_active {
                                     con_names = enumerate_controllers().unwrap();
@@ -324,6 +324,7 @@ fn main() -> eframe::Result {
                                                     let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                     let deadzone_val = deadzone.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
                                                     let hipfire_val = hipfire.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
+                                                    let reverse_coef_val = reverse_coef.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
                                                     
                                                     con_mapper = Some(ConMapper::start(
                                                         state,
@@ -337,7 +338,8 @@ fn main() -> eframe::Result {
                                                         mid_str_val,
                                                         inner_str_val,
                                                         deadzone_val,
-                                                        hipfire_val
+                                                        hipfire_val,
+                                                        reverse_coef_val
                                                     ));
                                                     last_log = "启动智能映射".to_owned();
                                                 } else {
@@ -555,22 +557,16 @@ fn main() -> eframe::Result {
                                 }
                                 }
                             }
+
                             ui.add_space(4.0);
                             egui::Grid::new("param_grid").spacing([10.0, 5.0]).show(ui, |ui| {
-                                let edit_height = ui.text_style_height(&egui::TextStyle::Body);
                                 ui.label("外圈大小");
                                 let mut outer_guard = outer_size.lock().unwrap();
-                                ui.add_sized(
-                                    [40.0, edit_height], 
-                                    TextEdit::singleline(&mut *outer_guard).hint_text("")
-                                );
+                                ui.add(TextEdit::singleline(&mut *outer_guard).hint_text(""));
                                 // 外圈强度输入（0.0-1.0）
                                 ui.label("外圈强度");
                                 let mut outer_str_guard = outer_str.lock().unwrap();
-                                ui.add_sized(
-                                    [40.0, edit_height],
-                                    TextEdit::singleline(&mut *outer_str_guard).hint_text("")
-                                );
+                                ui.add(TextEdit::singleline(&mut *outer_str_guard).hint_text(""));
                                 if let Some(err) = outer_err {
                                     ui.colored_label(Color32::RED, err);
                                 } else if let Some(err) = outer_str_err {
@@ -581,17 +577,11 @@ fn main() -> eframe::Result {
                                 ui.end_row();
                                 ui.label("中圈大小");
                                 let mut mid_guard = mid_size.lock().unwrap();
-                                ui.add_sized(
-                                    [40.0, edit_height], 
-                                    TextEdit::singleline(&mut *mid_guard).hint_text("")
-                                );
+                                ui.add(TextEdit::singleline(&mut *mid_guard).hint_text(""));
                                 // 中圈强度输入（0.0-1.0）
                                 ui.label("中圈强度");
                                 let mut mid_str_guard = mid_str.lock().unwrap();
-                                ui.add_sized(
-                                    [40.0, edit_height],
-                                    TextEdit::singleline(&mut *mid_str_guard).hint_text("")
-                                );
+                                ui.add(TextEdit::singleline(&mut *mid_str_guard).hint_text(""));
                                 if let Some(err) = mid_err {
                                     ui.colored_label(Color32::RED, err);
                                 } else if let Some(err) = mid_str_err {
@@ -602,17 +592,11 @@ fn main() -> eframe::Result {
                                 ui.end_row();
                                 ui.label("内圈大小");
                                 let mut inner_guard = inner_size.lock().unwrap();
-                                ui.add_sized(
-                                    [40.0, edit_height], 
-                                    TextEdit::singleline(&mut *inner_guard).hint_text("")
-                                );
+                                ui.add(TextEdit::singleline(&mut *inner_guard).hint_text(""));
                                 // 内圈强度输入（0.0-1.0）
                                 ui.label("内圈强度");
                                 let mut inner_str_guard = inner_str.lock().unwrap();
-                                ui.add_sized(
-                                    [40.0, edit_height],
-                                    TextEdit::singleline(&mut *inner_str_guard).hint_text("")
-                                );
+                                ui.add(TextEdit::singleline(&mut *inner_str_guard).hint_text(""));
                                 if let Some(err) = inner_err {
                                     ui.colored_label(Color32::RED, err);
                                 } else if let Some(err) = inner_str_err {
@@ -624,16 +608,10 @@ fn main() -> eframe::Result {
                                 // 腰射和死区（0.0-1.0）
                                 ui.label("腰射系数");
                                 let mut hipfire_guard = hipfire.lock().unwrap();
-                                ui.add_sized(
-                                    [40.0, edit_height],
-                                    TextEdit::singleline(&mut *hipfire_guard).hint_text("")
-                                );
+                                ui.add(TextEdit::singleline(&mut *hipfire_guard).hint_text(""));
                                 ui.label("死区大小");
                                 let mut deadzone_guard = deadzone.lock().unwrap();
-                                ui.add_sized(
-                                    [40.0, edit_height],
-                                    TextEdit::singleline(&mut *deadzone_guard).hint_text("")
-                                );
+                                ui.add(TextEdit::singleline(&mut *deadzone_guard).hint_text(""));
                                 if let Some(err) = hipfire_err {
                                     ui.colored_label(Color32::RED, err);
                                 } else if let Some(err) = deadzone_err {
@@ -643,6 +621,17 @@ fn main() -> eframe::Result {
                                 }
                                 ui.end_row();
                             });
+                            
+                            // 反向系数滑块
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.label("反向系数");
+                                let mut reverse_coef_val = reverse_coef.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
+                                if ui.add(egui::Slider::new(&mut reverse_coef_val, 0.0..=1.0)).changed() {
+                                    *reverse_coef.lock().unwrap() = format!("{:.2}", reverse_coef_val);
+                                }
+                            });
+                            
                             let outer = outer_f32.unwrap_or(0.0) / ctx.pixels_per_point();
                             let mid = mid_f32.unwrap_or(0.0) / ctx.pixels_per_point();
                             let inner = inner_f32.unwrap_or(0.0) / ctx.pixels_per_point();
@@ -651,11 +640,13 @@ fn main() -> eframe::Result {
                         });
                     if ch.body_returned.is_some() {
                         ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
-                            window_w, 
-                            window_h + 255.0
+                            window_w + 40.0, 
+                            window_h + 280.0
                         )));
+                        allow_mapping = false;
                     } else {
                         do_resize = true;
+                        allow_mapping = true;
                     }
                 }
 
@@ -741,8 +732,9 @@ fn main() -> eframe::Result {
         outer_str: outer_str_for_save.lock().unwrap().clone(),
         mid_str: mid_str_for_save.lock().unwrap().clone(),
         inner_str: inner_str_for_save.lock().unwrap().clone(),
-        deadzone: Some(deadzone_for_save.lock().unwrap().clone()),
-        hipfire: Some(hipfire_for_save.lock().unwrap().clone()),
+        deadzone: deadzone_for_save.lock().unwrap().clone(),
+        hipfire: hipfire_for_save.lock().unwrap().clone(),
+        reverse_coef: reverse_coef_for_save.lock().unwrap().clone(),
     });
     // =========================
     run_hidhidecli(&["--cloak-off"]).unwrap();

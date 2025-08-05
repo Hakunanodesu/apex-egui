@@ -31,6 +31,7 @@ impl ConMapper {
         inner_str: f32,
         deadzone: f32,
         hipfire: f32,
+        reverse_coef: f32, // 新增反向系数参数
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let hz = Arc::new(Mutex::new(0u32)); // 新增
@@ -106,8 +107,24 @@ impl ConMapper {
                                     // 归一化到 -32768~32767 并叠加到右摇杆
                                     let rx = (adjusted_x * 32767.0).clamp(-32768.0, 32767.0) as i16;
                                     let ry = (adjusted_y * 32767.0).clamp(-32768.0, 32767.0) as i16;
-                                    mapped_state.thumb_rx = mapped_state.thumb_rx.saturating_add(rx);
-                                    mapped_state.thumb_ry = mapped_state.thumb_ry.saturating_add(ry);
+                                    
+                                    // 检查叠加后是否改变方向，如果改变则重置为居中
+                                    let new_rx = mapped_state.thumb_rx.saturating_add(rx);
+                                    let new_ry = mapped_state.thumb_ry.saturating_add(ry);
+                                    
+                                    // 检查X轴方向是否改变
+                                    if (mapped_state.thumb_rx > 0 && new_rx < 0) || (mapped_state.thumb_rx < 0 && new_rx > 0) {
+                                        mapped_state.thumb_rx = (reverse_coef * new_rx as f32) as i16; // 应用反向系数
+                                    } else {
+                                        mapped_state.thumb_rx = new_rx;
+                                    }
+                                    
+                                    // 检查Y轴方向是否改变
+                                    if (mapped_state.thumb_ry > 0 && new_ry < 0) || (mapped_state.thumb_ry < 0 && new_ry > 0) {
+                                        mapped_state.thumb_ry = (reverse_coef * new_ry as f32) as i16; // 应用反向系数
+                                    } else {
+                                        mapped_state.thumb_ry = new_ry;
+                                    }
                                     // println!("[ConMapper] x: {x:.3}, y: {y:.3}, thumb_rx: {}, thumb_ry: {}", mapped_state.thumb_rx, mapped_state.thumb_ry);
                                 }
                             }

@@ -15,21 +15,23 @@ pub struct UserConfig {
     pub outer_str: String,
     pub mid_str: String,
     pub inner_str: String,
-    pub deadzone: Option<String>,
-    pub hipfire: Option<String>,
+    pub deadzone: String,
+    pub hipfire: String,
+    pub reverse_coef: String, // 反向系数
 }
 
 impl Default for UserConfig {
     fn default() -> Self {
         Self {
-            outer_size: "320.0".to_string(),
-            mid_size: "80.0".to_string(),
-            inner_size: "80.0".to_string(),
+            outer_size: "320".to_string(),
+            mid_size: "80".to_string(),
+            inner_size: "80".to_string(),
             outer_str: "0.2".to_string(),
-            mid_str: "0.5".to_string(),
-            inner_str: "0.5".to_string(),
-            deadzone: Some("0.0".to_string()),
-            hipfire: Some("0.6".to_string()),
+            mid_str: "0.4".to_string(),
+            inner_str: "0.4".to_string(),
+            deadzone: "0.0".to_string(),
+            hipfire: "0.6".to_string(),
+            reverse_coef: "0.0".to_string(), // 默认反向系数为0.0
         }
     }
 }
