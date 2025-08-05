@@ -31,7 +31,7 @@ impl Default for UserConfig {
             inner_str: "0.4".to_string(),
             deadzone: "0.0".to_string(),
             hipfire: "0.6".to_string(),
-            reverse_coef: "0.0".to_string(), // 默认反向系数为0.0
+            reverse_coef: "0.5".to_string(),
         }
     }
 }
