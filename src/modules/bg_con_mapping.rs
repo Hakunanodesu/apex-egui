@@ -13,7 +13,6 @@ use crate::modules::bg_onnx_dml_od::Detection;
 pub struct ConMapper {
     stop_flag: Arc<AtomicBool>,
     handle: JoinHandle<()>,
-    hz: Arc<Mutex<u32>>, // 新增采样率字段
 }
 
 impl ConMapper {
@@ -34,12 +33,10 @@ impl ConMapper {
         reverse_coef: f32, // 新增反向系数参数
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
-        let hz = Arc::new(Mutex::new(0u32)); // 新增
         let stop_clone = stop_flag.clone();
         let state_clone = state.clone();
         let client_clone = client.clone();
         let det_result_clone = det_result.clone();
-        let hz_clone = hz.clone(); // 新增
 
         let handle = thread::spawn(move || {
             // 等待 SDL 读取线程就绪
@@ -53,9 +50,7 @@ impl ConMapper {
             tgt.plugin().expect("plugin failed");
             tgt.wait_ready().expect("wait_ready failed");
 
-            let mut map_count = 0;
-            let mut last_time = std::time::Instant::now();
-            let mut prev_state = XGamepad::default(); // 新增：记录上一次状态
+
             while !stop_clone.load(Ordering::SeqCst) {
                 let orig_state = state_clone.lock().unwrap().clone(); // 每次都用原始state
                 let mut mapped_state = orig_state.clone();
@@ -133,34 +128,18 @@ impl ConMapper {
                 }
                 
                 tgt.update(&mapped_state).ok();
-                // 只有状态发生变化才计数
-                if mapped_state != prev_state {
-                    map_count += 1;
-                    prev_state = mapped_state.clone();
-                }
-                if last_time.elapsed().as_secs_f32() >= 1.0 {
-                    let mut hz_guard = hz_clone.lock().unwrap();
-                    *hz_guard = map_count;
-                    map_count = 0;
-                    last_time = std::time::Instant::now();
-                }
                 thread::sleep(Duration::from_millis(1));
             }
 
             tgt.unplug().ok();
         });
 
-        ConMapper { stop_flag, handle, hz }
+        ConMapper { stop_flag, handle }
     }
 
     /// 停止映射线程并 join
     pub fn stop(self) {
         self.stop_flag.store(true, Ordering::SeqCst);
         let _ = self.handle.join();
-    }
-
-    /// 获取采样率fps
-    pub fn hz(&self) -> Arc<Mutex<u32>> {
-        self.hz.clone()
     }
 }

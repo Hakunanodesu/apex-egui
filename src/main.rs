@@ -94,10 +94,9 @@ fn main() -> eframe::Result {
     let hipfire_for_save = hipfire.clone();
     let reverse_coef_for_save = reverse_coef.clone();
 
-    let mut last_log = String::from("初始化成功"); // 仅保留最新一条日志
     let mut do_resize = true;
     let mut on_top = false;
-    let (window_w, window_h) = (280.0, 293.0);
+    let (window_w, window_h) = (280.0, 206.0);
     let options = NativeOptions {
         viewport: ViewportBuilder::default()
             .with_resizable(false),
@@ -300,7 +299,6 @@ fn main() -> eframe::Result {
                                                         .expect("无法启动 DetectorThread")
                                                 );
                                             } else {
-                                                last_log = "错误：屏幕捕获器未启动".to_owned();
                                                 mapping_active = false;
                                             }
                                         }
@@ -341,17 +339,14 @@ fn main() -> eframe::Result {
                                                         hipfire_val,
                                                         reverse_coef_val
                                                     ));
-                                                    last_log = "启动智能映射".to_owned();
                                                 } else {
-                                                    last_log = "错误：检测器未启动".to_owned();
                                                     mapping_active = false;
                                                 }
                                             } else {
-                                                last_log = "错误：手柄读取器未启动".to_owned();
                                                 mapping_active = false;
                                             }
                                         } else if con_mapper.is_some() {
-                                            last_log = "映射已存在，无需重复启动".to_owned();
+                                            // 映射已存在，无需重复启动
                                         }
                                         do_resize = true;
                                         show_config = false;
@@ -376,7 +371,6 @@ fn main() -> eframe::Result {
                                     if let Some(capt) = screen_capturer.take() {
                                         capt.stop();
                                     }
-                                    last_log = "停止智能映射".to_owned();
                                     do_resize = true;
                                     show_preview = false;
                                     on_top = false;
@@ -399,7 +393,6 @@ fn main() -> eframe::Result {
                                         f32::max(window_w, outer_val / ctx.pixels_per_point() + 16.0), 
                                         window_h + outer_val / ctx.pixels_per_point() + 16.0
                                     )));
-                                    last_log = "打开识别内容预览".to_owned();
                                 } else {
                                     do_resize = true;
                                     on_top = false;
@@ -408,7 +401,6 @@ fn main() -> eframe::Result {
                                             WindowLevel::Normal
                                         )
                                     );
-                                    last_log = "关闭识别内容预览".to_owned();
                                 }
                             }
                             // 置顶开关
@@ -421,14 +413,12 @@ fn main() -> eframe::Result {
                                                 WindowLevel::AlwaysOnTop
                                             )
                                         );
-                                        last_log = "窗口已置顶".to_owned();
                                     } else {
                                         ctx.send_viewport_cmd(
                                             ViewportCommand::WindowLevel(
                                                 WindowLevel::Normal
                                             )
                                         );
-                                        last_log = "窗口取消置顶".to_owned();
                                     }
                                 }
                             });
@@ -668,34 +658,6 @@ fn main() -> eframe::Result {
             TopBottomPanel::bottom("lag_show_panel")
                 .resizable(false)
                 .show(ctx, |ui| {
-                    // 新增：显示ConReader采样率
-                    if let Some(reader) = con_reader.as_ref() {
-                        let fps_arc = reader.hz();
-                        if let Ok(fps_guard) = fps_arc.lock() {
-                            ui.label(format!("原始采样率: {} hz", *fps_guard));
-                        } else {
-                            ui.label("原始采样率: 0 hz");
-                        }
-                    } else {
-                        ui.label("原始采样率: 0 hz");
-                    }
-                    // 新增：显示ConMapper采样率
-                    if let Some(mapper) = con_mapper.as_ref() {
-                        let fps_arc = mapper.hz();
-                        if let Ok(fps_guard) = fps_arc.lock() {
-                            ui.label(format!("映射采样率: {} hz", *fps_guard));
-                        } else {
-                            ui.label("映射采样率: 0 hz");
-                        }
-                    } else {
-                        ui.label("映射采样率: 0 hz");
-                    }
-                    if let Some(capturer) = screen_capturer.as_ref() {
-                        let fps = capturer.fps();
-                        ui.label(format!("捕获帧率: {:.0} fps", fps));
-                    } else {
-                        ui.label("捕获帧率: 0 fps");
-                    }
                     if let Some(det) = detector.as_ref() {
                         let fps_arc = det.fps();
                         if let Ok(fps_guard) = fps_arc.lock() {
@@ -708,13 +670,6 @@ fn main() -> eframe::Result {
                     }
                 });
             
-            // —— 底部固定单行日志展示 —— 
-            TopBottomPanel::bottom("log_panel")
-                .resizable(false)
-                .show(ctx, |ui| {
-                    ui.label("上一次操作：".to_owned() + &last_log);
-                });
-
             // 卡密输入框
             TopBottomPanel::bottom("kami_input")
                 .resizable(false) // 禁止拖拽调整大小

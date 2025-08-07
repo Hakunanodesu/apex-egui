@@ -14,6 +14,7 @@ use sdl2::{
 };
 use vigem_client::{XGamepad, XButtons};
 
+
 fn scale_to_u8(v: i16) -> u8 {
     (((v as i32 + 32768) * 255 / 65535) as u8).clamp(0, 255)
 }
@@ -120,7 +121,6 @@ pub struct ConReader {
     state: Arc<Mutex<XGamepad>>,
     ready_flag: Arc<AtomicBool>,
     handle: JoinHandle<()>,
-    hz: Arc<Mutex<u32>>, // 新增采样率字段
 }
 
 impl ConReader {
@@ -129,11 +129,9 @@ impl ConReader {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Mutex::new(XGamepad::default()));
         let ready_flag = Arc::new(AtomicBool::new(false));
-        let hz = Arc::new(Mutex::new(0u32)); // 新增
         let stop_clone = stop_flag.clone();
         let state_clone = state.clone();
         let ready_clone = ready_flag.clone();
-        let hz_clone = hz.clone(); // 新增
 
         let handle = thread::spawn(move || {
             let sdl_ctx = sdl2::init().expect("SDL init failed");
@@ -166,9 +164,6 @@ impl ConReader {
                 let _ = pump.enable_event(*ev);
             }
 
-            let mut event_count = 0;
-            let mut last_time = std::time::Instant::now();
-            let mut prev_state = XGamepad::default(); // 新增：记录上一次状态
             // 循环处理
             while !stop_clone.load(Ordering::SeqCst) {
                 for evt in pump.poll_iter() {
@@ -211,23 +206,12 @@ impl ConReader {
                         }
                         _ => {}
                     }
-                    // 只有状态发生变化才计数
-                    if *lock != prev_state {
-                        event_count += 1;
-                        prev_state = lock.clone();
-                    }
-                }
-                if last_time.elapsed().as_secs_f32() >= 1.0 {
-                    let mut hz_guard = hz_clone.lock().unwrap();
-                    *hz_guard = event_count;
-                    event_count = 0;
-                    last_time = std::time::Instant::now();
                 }
                 thread::sleep(Duration::from_millis(1));
             }
         });
 
-        ConReader { stop_flag, state, ready_flag, handle, hz }
+        ConReader { stop_flag, state, ready_flag, handle }
     }
 
     /// 停止线程并等待 join 完成
@@ -245,10 +229,5 @@ impl ConReader {
     /// 获取 ready_flag，用于映射线程等待
     pub fn ready(&self) -> Arc<AtomicBool> {
         self.ready_flag.clone()
-    }
-
-    /// 获取采样率fps
-    pub fn hz(&self) -> Arc<Mutex<u32>> {
-        self.hz.clone()
     }
 }
