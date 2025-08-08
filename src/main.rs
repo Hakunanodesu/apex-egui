@@ -98,7 +98,7 @@ fn main() -> eframe::Result {
 
     let mut do_resize = true;
     let mut on_top = false;
-    let (window_w, window_h) = (280.0, 206.0);
+    let (window_w, window_h) = (280.0, 205.0);
     let options = NativeOptions {
         viewport: ViewportBuilder::default()
             .with_resizable(false),
@@ -648,7 +648,7 @@ fn main() -> eframe::Result {
                     if ch.body_returned.is_some() {
                         ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
                             window_w + 40.0, 
-                            window_h + 280.0
+                            window_h + 308.0
                         )));
                         allow_mapping = false;
                     } else {
