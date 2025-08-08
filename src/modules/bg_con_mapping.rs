@@ -69,7 +69,7 @@ impl ConMapper {
                                 if right_trigger_pressed {
                                     let center = outer_size / 2.0;
                                     let dx = d.x - center;
-                                    let dy = (d.y + (aim_height - 0.5) * d.h) - center;
+                                    let dy = (d.y + (0.5 - aim_height) * d.h) - center;
                                     let dist = ((dx * dx + dy * dy).sqrt()).min(center);
                                     let strength = if dist <= inner_size / 2.0 {
                                         // inner区间，线性递减
