@@ -15,10 +15,8 @@ fn apply_right_trigger_adjustment(
     mapped_state: &mut XGamepad,
     d: &Detection,
     outer_size: f32,
-    mid_size: f32,
     inner_size: f32,
     outer_str: f32,
-    mid_str: f32,
     inner_str: f32,
     deadzone: f32,
     hipfire: f32,
@@ -34,9 +32,6 @@ fn apply_right_trigger_adjustment(
         // inner区间，线性递减
         let t = if inner_size > 0.0 { dist / (inner_size / 2.0) } else { 1.0 };
         deadzone * (1.0 - t) + inner_str * t
-    } else if dist <= mid_size / 2.0 {
-        // mid区间
-        mid_str
     } else if dist <= outer_size / 2.0 {
         // outer区间
         outer_str
@@ -45,7 +40,7 @@ fn apply_right_trigger_adjustment(
         0.0
     };
     let (x, y) = if dist > 0.0 {
-        (strength * dx / dist, -strength * dy / dist)
+        (strength * dx / dist, -0.5 * strength * dy / dist)
     } else {
         (0.0, 0.0)
     };
@@ -90,10 +85,8 @@ impl ConMapper {
         ready_flag: Arc<AtomicBool>,
         det_result: Option<Arc<Mutex<Option<Vec<Detection>>>>>,
         outer_size: f32,
-        mid_size: f32,
         inner_size: f32,
         outer_str: f32,
-        mid_str: f32,
         inner_str: f32,
         deadzone: f32,
         hipfire: f32,
@@ -143,10 +136,8 @@ impl ConMapper {
                                         &mut mapped_state,
                                         d,
                                         outer_size,
-                                        mid_size,
                                         inner_size,
                                         outer_str,
-                                        mid_str,
                                         inner_str,
                                         deadzone,
                                         hipfire,

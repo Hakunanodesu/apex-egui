@@ -23,7 +23,7 @@ mod utils;
 mod modules;
 use crate::utils::{
     tools::{
-        driver_path_exist, get_exe_path, enumerate_controllers, 
+        driver_path_exist, get_exe_path, enumerate_controllers, enumerate_pico,
         get_text_width, UserConfig, load_config, save_config
     }, 
     ui::{
@@ -39,6 +39,7 @@ use crate::modules::{
     hidhide::run_hidhidecli,
     bg_screen_cap::ScreenCapturer,
     bg_onnx_dml_od::{DetectorThread},
+    bg_mouse_mapping::MouseMapper,
 };
 
 fn main() -> eframe::Result {
@@ -52,6 +53,7 @@ fn main() -> eframe::Result {
     // 卡密
     let mut kami: String = String::new();
     let mut con_names = enumerate_controllers().unwrap();
+    let mut pico_exist = enumerate_pico();
     let mut dl_state_vigembus = DownloadState::Idle;
     let mut dl_label_vigembus = String::new();
     let mut dl_cancel_vigembus = Arc::new(AtomicBool::new(false));
@@ -63,6 +65,7 @@ fn main() -> eframe::Result {
     let vg_client = Arc::new(Client::connect().unwrap());
     let mut con_reader: Option<ConReader> = None;
     let mut con_mapper: Option<ConMapper> = None;
+    let mut mouse_mapper: Option<MouseMapper> = None;
     let mut allow_mapping = true;
     let mut mapping_active = false; // 映射状态
     let mut show_config = false;
@@ -73,28 +76,26 @@ fn main() -> eframe::Result {
     // ====== 配置文件读取 ======
     let user_config = load_config();
     let outer_size = Arc::new(Mutex::new(user_config.outer_size));
-    let mid_size = Arc::new(Mutex::new(user_config.mid_size));
     let inner_size = Arc::new(Mutex::new(user_config.inner_size));
     let outer_str = Arc::new(Mutex::new(user_config.outer_str));
-    let mid_str = Arc::new(Mutex::new(user_config.mid_str));
     let inner_str = Arc::new(Mutex::new(user_config.inner_str));
     let deadzone = Arc::new(Mutex::new(user_config.deadzone));
     let hipfire = Arc::new(Mutex::new(user_config.hipfire));
     let reverse_coef = Arc::new(Mutex::new(user_config.reverse_coef));
     let aim_height = Arc::new(Mutex::new(user_config.aim_height));
+    let mouse_mode = Arc::new(Mutex::new(user_config.mouse_mode.parse::<bool>().unwrap_or(false)));
     // =========================
 
     // 为保存配置克隆变量
     let outer_size_for_save = outer_size.clone();
-    let mid_size_for_save = mid_size.clone();
     let inner_size_for_save = inner_size.clone();
     let outer_str_for_save = outer_str.clone();
-    let mid_str_for_save = mid_str.clone();
     let inner_str_for_save = inner_str.clone();
     let deadzone_for_save = deadzone.clone();
     let hipfire_for_save = hipfire.clone();
     let reverse_coef_for_save = reverse_coef.clone();
     let aim_height_for_save = aim_height.clone();
+    let mouse_mode_for_save = mouse_mode.clone();
 
     let mut do_resize = true;
     let mut on_top = false;
@@ -228,56 +229,89 @@ fn main() -> eframe::Result {
                         ui.end_row();
             
                         // —— 第三行：已识别手柄列表 —— 
-                        ui.label("存在手柄");
-                        if con_names.is_empty() {
-                            ui.colored_label(Color32::RED, "✖");
+                        if mouse_mode.lock().unwrap().clone() {
+                            ui.label("存在Pico");
+                            if pico_exist {
+                                ui.colored_label(Color32::GREEN, "✔");
+                            } else {
+                                ui.colored_label(Color32::RED, "✖");
+                            }
                         } else {
-                            ui.colored_label(Color32::GREEN, "✔");
+                            ui.label("存在手柄");
+                            if con_names.is_empty() {
+                                ui.colored_label(Color32::RED, "✖");
+                            } else {
+                                ui.colored_label(Color32::GREEN, "✔");
+                            }
                         }
                         ui.add_enabled_ui(!mapping_active && !installing, |ui| {
                             let btn = ui.button("刷新 ⓘ");
-                            if btn.hovered() {
-                                show_tooltip_at_pointer(
-                                    &ui.ctx(),
-                                    ui.layer_id(),
-                                    btn.id,
-                                    |ui| {
-                                        if con_names.is_empty() {
-                                            ui.add(
-                                                Label::new("未列出手柄，请刷新")
-                                            );
-                                        } else {
-                                            ui.add(
-                                                Label::new(
-                                                    egui::RichText::new(
-                                                        "⚠️\nXbox 系手柄在每次软件打开并检测到后需重新连接手柄\n⚠️"
-                                                    ).color(Color32::ORANGE)
-                                                )
-                                            );
-                                            ui.label("当前已检测到的手柄：");
-                                            for (i, name) in con_names.iter().enumerate() {
+                            if !mouse_mode.lock().unwrap().clone() {
+                                if btn.hovered() {
+                                    show_tooltip_at_pointer(
+                                        &ui.ctx(),
+                                        ui.layer_id(),
+                                        btn.id,
+                                        |ui| {
+                                            if con_names.is_empty() {
                                                 ui.add(
-                                                    Label::new(format!("{}) {}", i + 1, name))
+                                                    Label::new("未列出手柄，请刷新")
                                                 );
-                                            }
-                                        };
-                                    }
-                                );
+                                            } else {
+                                                ui.add(
+                                                    Label::new(
+                                                        egui::RichText::new(
+                                                            "⚠️\nXbox 系手柄在每次软件打开并检测到后需重新连接手柄\n⚠️"
+                                                        ).color(Color32::ORANGE)
+                                                    )
+                                                );
+                                                ui.label("当前已检测到的手柄：");
+                                                for (i, name) in con_names.iter().enumerate() {
+                                                    ui.add(
+                                                        Label::new(format!("{}) {}", i + 1, name))
+                                                    );
+                                                }
+                                            };
+                                        }
+                                    );
+                                }
                             }
                             if btn.clicked() {
-                                con_names = 
-                                    enumerate_controllers().unwrap();
+                                if mouse_mode.lock().unwrap().clone() {
+                                    pico_exist = enumerate_pico();
+                                } else {
+                                    con_names = enumerate_controllers().unwrap();
+                                }
                             }
                         });
                         ui.end_row();
             
                         // —— 第四行：智能映射 开关 —— 
                         ui.label("智能映射");
-                        ui.add_enabled_ui(!con_names.is_empty() && !installing && allow_mapping, |ui| {
+                        ui.add_enabled_ui(
+                            (
+                                !con_names.is_empty() 
+                                && !installing 
+                                && allow_mapping 
+                                && !mouse_mode.lock().unwrap().clone()
+                            ) 
+                            || (
+                                pico_exist 
+                                && mouse_mode.lock().unwrap().clone()
+                            ),
+                            |ui| {
                             if ui.add(toggle_switch(&mut mapping_active)).clicked() {
                                 if mapping_active {
-                                    con_names = enumerate_controllers().unwrap();
-                                    if !con_names.is_empty() {
+                                    if mouse_mode.lock().unwrap().clone() {
+                                        pico_exist = enumerate_pico();
+                                    } else {
+                                        con_names = enumerate_controllers().unwrap();
+                                    }
+                                    if (
+                                        !con_names.is_empty() && !mouse_mode.lock().unwrap().clone()
+                                    ) || (
+                                        pico_exist && mouse_mode.lock().unwrap().clone()
+                                    ) {
                                         // 1. 启动屏幕抓取（只做一次）
                                         if screen_capturer.is_none() {
                                             let outer_guard = outer_size.clone();
@@ -305,52 +339,70 @@ fn main() -> eframe::Result {
                                             }
                                         }
                                         
-                                        // 3. 启动读取线程
-                                        if con_reader.is_none() {
-                                            con_reader = Some(ConReader::start());
-                                        }
-                                        
-                                        // 4. 启动映射器（依赖 detector 和 reader）
-                                        if con_mapper.is_none() && detector.is_some() {
-                                            if let Some(reader) = con_reader.as_ref() {
+                                        // 3. 启动读取线程（仅在非键鼠模式下）
+                                        if mouse_mode.lock().unwrap().clone() {
+                                            if mouse_mapper.is_none() && detector.is_some() {
                                                 if let Some(det) = detector.as_ref() {
-                                                    let state = reader.state();
-                                                    let ready = reader.ready();
                                                     let outer_val = outer_size.lock().unwrap().trim().parse::<f32>().unwrap_or(320.0);
-                                                    let mid_val = mid_size.lock().unwrap().trim().parse::<f32>().unwrap_or(200.0);
                                                     let inner_val = inner_size.lock().unwrap().trim().parse::<f32>().unwrap_or(100.0);
-                                                    let outer_str_val = outer_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
-                                                    let mid_str_val = mid_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                     let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
-                                                    let deadzone_val = deadzone.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
-                                                    let hipfire_val = hipfire.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
+                                                    let outer_str_val = outer_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                     let reverse_coef_val = reverse_coef.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
                                                     let aim_height_val = aim_height.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
-                                                    
-                                                    con_mapper = Some(ConMapper::start(
-                                                        state,
-                                                        vg_client.clone(),
-                                                        ready,
+                                                    mouse_mapper = Some(MouseMapper::start(
                                                         Some(det.result()),
                                                         outer_val,
-                                                        mid_val,
                                                         inner_val,
-                                                        outer_str_val,
-                                                        mid_str_val,
                                                         inner_str_val,
-                                                        deadzone_val,
-                                                        hipfire_val,
+                                                        outer_str_val,
                                                         reverse_coef_val,
                                                         aim_height_val
                                                     ));
                                                 } else {
                                                     mapping_active = false;
                                                 }
-                                            } else {
-                                                mapping_active = false;
                                             }
-                                        } else if con_mapper.is_some() {
-                                            // 映射已存在，无需重复启动
+                                        } else {
+                                            if con_reader.is_none() {
+                                                con_reader = Some(ConReader::start());
+                                            }
+                                            
+                                            // 4. 启动映射器（依赖 detector 和 reader）
+                                            if con_mapper.is_none() && detector.is_some() {
+                                                if let Some(reader) = con_reader.as_ref() {
+                                                    if let Some(det) = detector.as_ref() {
+                                                        let state = reader.state();
+                                                        let ready = reader.ready();
+                                                        let outer_val = outer_size.lock().unwrap().trim().parse::<f32>().unwrap_or(320.0);
+                                                        let inner_val = inner_size.lock().unwrap().trim().parse::<f32>().unwrap_or(100.0);
+                                                        let outer_str_val = outer_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
+                                                        let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
+                                                        let deadzone_val = deadzone.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
+                                                        let hipfire_val = hipfire.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
+                                                        let reverse_coef_val = reverse_coef.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
+                                                        let aim_height_val = aim_height.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
+                                                        
+                                                        con_mapper = Some(ConMapper::start(
+                                                            state,
+                                                            vg_client.clone(),
+                                                            ready,
+                                                            Some(det.result()),
+                                                            outer_val,
+                                                            inner_val,
+                                                            outer_str_val,
+                                                            inner_str_val,
+                                                            deadzone_val,
+                                                            hipfire_val,
+                                                            reverse_coef_val,
+                                                            aim_height_val
+                                                        ));
+                                                    } else {
+                                                        mapping_active = false;
+                                                    }
+                                                } else {
+                                                    mapping_active = false;
+                                                }
+                                            }
                                         }
                                         do_resize = true;
                                         show_config = false;
@@ -359,13 +411,19 @@ fn main() -> eframe::Result {
                                     }
                                 } else {
                                     // 按照启动的反序关闭组件
-                                    // 1. 先关闭映射器（最后启动的）
-                                    if let Some(mapper) = con_mapper.take() {
-                                        mapper.stop();
-                                    }
-                                    // 2. 关闭读取线程
-                                    if let Some(reader) = con_reader.take() {
-                                        reader.stop();
+                                    // 1. 先关闭映射器（最后启动的，仅在非键鼠模式下）
+                                    if mouse_mode.lock().unwrap().clone() {
+                                        if let Some(mapper) = mouse_mapper.take() {
+                                            mapper.stop();
+                                        }
+                                    } else {
+                                        if let Some(mapper) = con_mapper.take() {
+                                            mapper.stop();
+                                        }
+                                        // 2. 关闭读取线程
+                                        if let Some(reader) = con_reader.take() {
+                                            reader.stop();
+                                        }
                                     }
                                     // 3. 关闭检测器
                                     if let Some(det) = detector.take() {
@@ -381,6 +439,11 @@ fn main() -> eframe::Result {
                                 }
                             }
                         });
+                        ui.label("键鼠模式");
+                        {
+                            let mut mouse_mode_guard = mouse_mode.lock().unwrap();
+                            if ui.add(toggle_switch(&mut *mouse_mode_guard)).clicked() {}
+                        }
                         ui.end_row();
                         
                         if mapping_active {
@@ -439,10 +502,9 @@ fn main() -> eframe::Result {
                             // 坐标轴曲线
                             show_param_curve(
                                 ui,
-                                &mid_size.lock().unwrap(),
+                                &outer_size.lock().unwrap(),
                                 &inner_size.lock().unwrap(),
                                 &outer_str.lock().unwrap(),
-                                &mid_str.lock().unwrap(),
                                 &inner_str.lock().unwrap(),
                                 &deadzone.lock().unwrap(),
                             );
@@ -451,13 +513,10 @@ fn main() -> eframe::Result {
                                     .unwrap_or(vec2(1920.0, 1080.0));
                             let max_size = monitor_size.y * ctx.pixels_per_point();
                             let mut outer_f32: Option<f32> = None;
-                            let mut mid_f32: Option<f32> = None;
                             let mut inner_f32: Option<f32> = None;
                             let mut outer_err = None;
-                            let mut mid_err = None;
                             let mut inner_err = None;
                             let mut outer_str_err = None;
-                            let mut mid_str_err = None;
                             let mut inner_str_err = None;
                             let mut deadzone_err = None;
                             let mut hipfire_err = None;
@@ -483,31 +542,6 @@ fn main() -> eframe::Result {
                                         Ok(v) if v < 0.0 || v > 1.0 => outer_str_err = Some("范围0.0-1.0"),
                                         Ok(_) => {},
                                         Err(_) => outer_str_err = Some("格式错误"),
-                                    }
-                                }
-                            }
-                            {
-                                let mid_guard = mid_size.lock().unwrap();
-                                if !mid_guard.trim().is_empty() {
-                                    match mid_guard.trim().parse::<f32>() {
-                                        Ok(v) => {
-                                            if v > max_size {
-                                                mid_err = Some("超出最大值");
-                                            } else {
-                                                mid_f32 = Some(v);
-                                            }
-                                        },
-                                        Err(_) => mid_err = Some("格式错误"),
-                                    }
-                                }
-                            }
-                            {
-                                let mid_str_guard = mid_str.lock().unwrap();
-                                if !mid_str_guard.trim().is_empty() {
-                                    match mid_str_guard.trim().parse::<f32>() {
-                                        Ok(v) if v < 0.0 || v > 1.0 => mid_str_err = Some("范围0.0-1.0"),
-                                        Ok(_) => {},
-                                        Err(_) => mid_str_err = Some("格式错误"),
                                     }
                                 }
                             }
@@ -574,21 +608,6 @@ fn main() -> eframe::Result {
                                     ui.label("");
                                 }
                                 ui.end_row();
-                                ui.label("中圈大小");
-                                let mut mid_guard = mid_size.lock().unwrap();
-                                ui.add(TextEdit::singleline(&mut *mid_guard).hint_text(""));
-                                // 中圈强度输入（0.0-1.0）
-                                ui.label("中圈强度");
-                                let mut mid_str_guard = mid_str.lock().unwrap();
-                                ui.add(TextEdit::singleline(&mut *mid_str_guard).hint_text(""));
-                                if let Some(err) = mid_err {
-                                    ui.colored_label(Color32::RED, err);
-                                } else if let Some(err) = mid_str_err {
-                                    ui.colored_label(Color32::RED, err);
-                                } else {
-                                    ui.label("");
-                                }
-                                ui.end_row();
                                 ui.label("内圈大小");
                                 let mut inner_guard = inner_size.lock().unwrap();
                                 ui.add(TextEdit::singleline(&mut *inner_guard).hint_text(""));
@@ -640,15 +659,14 @@ fn main() -> eframe::Result {
                             });
                             
                             let outer = outer_f32.unwrap_or(0.0) / ctx.pixels_per_point();
-                            let mid = mid_f32.unwrap_or(0.0) / ctx.pixels_per_point();
                             let inner = inner_f32.unwrap_or(0.0) / ctx.pixels_per_point();
-                            show_square_viewport(ctx, outer, mid, inner, false);
-                            show_square_viewport(ctx, outer, mid, inner, true);
+                            show_square_viewport(ctx, outer, inner, false);
+                            show_square_viewport(ctx, outer, inner, true);
                         });
                     if ch.body_returned.is_some() {
                         ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
                             window_w + 40.0, 
-                            window_h + 308.0
+                            window_h + 282.0
                         )));
                         allow_mapping = false;
                     } else {
@@ -701,15 +719,14 @@ fn main() -> eframe::Result {
     // ====== 配置文件写回 ======
     save_config(&UserConfig {
         outer_size: outer_size_for_save.lock().unwrap().clone(),
-        mid_size: mid_size_for_save.lock().unwrap().clone(),
         inner_size: inner_size_for_save.lock().unwrap().clone(),
         outer_str: outer_str_for_save.lock().unwrap().clone(),
-        mid_str: mid_str_for_save.lock().unwrap().clone(),
         inner_str: inner_str_for_save.lock().unwrap().clone(),
         deadzone: deadzone_for_save.lock().unwrap().clone(),
         hipfire: hipfire_for_save.lock().unwrap().clone(),
         reverse_coef: reverse_coef_for_save.lock().unwrap().clone(),
         aim_height: aim_height_for_save.lock().unwrap().clone(),
+        mouse_mode: mouse_mode_for_save.lock().unwrap().to_string(),
     });
     // =========================
     run_hidhidecli(&["--cloak-off"]).unwrap();

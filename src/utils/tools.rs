@@ -11,30 +11,28 @@ use std::fs;
 #[serde(default)]
 pub struct UserConfig {
     pub outer_size: String,
-    pub mid_size: String,
     pub inner_size: String,
     pub outer_str: String,
-    pub mid_str: String,
     pub inner_str: String,
     pub deadzone: String,
     pub hipfire: String,
     pub reverse_coef: String, // 反向系数
     pub aim_height: String,
+    pub mouse_mode: String, // 键鼠模式
 }
 
 impl Default for UserConfig {
     fn default() -> Self {
         Self {
             outer_size: "320".to_string(),
-            mid_size: "80".to_string(),
             inner_size: "80".to_string(),
             outer_str: "0.2".to_string(),
-            mid_str: "0.4".to_string(),
             inner_str: "0.4".to_string(),
             deadzone: "0.0".to_string(),
             hipfire: "0.6".to_string(),
             reverse_coef: "0.5".to_string(),
             aim_height: "0.7".to_string(),
+            mouse_mode: "false".to_string(),
         }
     }
 }
@@ -127,6 +125,30 @@ pub fn enumerate_controllers() -> Result<Vec<String>, Box<dyn Error>> {
     reenumerate();
 
     Ok(name_list)
+}
+
+/// 检查是否存在 VID = "239A"，PID = "80F4" 的设备（Pico）
+/// 返回 true 表示存在，false 表示不存在
+pub fn enumerate_pico() -> bool {
+    use hidapi::HidApi;
+
+    // 初始化 HIDAPI
+    let api = match HidApi::new() {
+        Ok(api) => api,
+        Err(_) => return false,
+    };
+
+    // 目标 VID/PID
+    let target_vid = 0x239A;
+    let target_pid = 0x80F4;
+
+    // 遍历所有设备
+    for device in api.device_list() {
+        if device.vendor_id() == target_vid && device.product_id() == target_pid {
+            return true;
+        }
+    }
+    false
 }
 
 pub fn get_text_width(ui: &Ui, text: impl Into<String>, text_style: TextStyle) -> f32 {
