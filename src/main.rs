@@ -81,7 +81,7 @@ fn main() -> eframe::Result {
     let inner_str = Arc::new(Mutex::new(user_config.inner_str));
     let deadzone = Arc::new(Mutex::new(user_config.deadzone));
     let hipfire = Arc::new(Mutex::new(user_config.hipfire));
-
+    let vertical_str = Arc::new(Mutex::new(user_config.vertical_str));
     let aim_height = Arc::new(Mutex::new(user_config.aim_height));
     let mouse_mode = Arc::new(Mutex::new(user_config.mouse_mode.parse::<bool>().unwrap_or(false)));
     // =========================
@@ -93,7 +93,7 @@ fn main() -> eframe::Result {
     let inner_str_for_save = inner_str.clone();
     let deadzone_for_save = deadzone.clone();
     let hipfire_for_save = hipfire.clone();
-
+    let vertical_str_for_save = vertical_str.clone();
     let aim_height_for_save = aim_height.clone();
     let mouse_mode_for_save = mouse_mode.clone();
 
@@ -347,6 +347,7 @@ fn main() -> eframe::Result {
                                                     let inner_val = inner_size.lock().unwrap().trim().parse::<f32>().unwrap_or(100.0);
                                                     let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                     let outer_str_val = outer_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
+                                                    let vertical_str_val = vertical_str.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
                                                     let aim_height_val = aim_height.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
                                                     mouse_mapper = Some(MouseMapper::start(
                                                         Some(det.result()),
@@ -354,6 +355,7 @@ fn main() -> eframe::Result {
                                                         inner_val,
                                                         inner_str_val,
                                                         outer_str_val,
+                                                        vertical_str_val,
                                                         aim_height_val
                                                     ));
                                                 } else {
@@ -377,6 +379,7 @@ fn main() -> eframe::Result {
                                                         let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                         let deadzone_val = deadzone.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
                                                         let hipfire_val = hipfire.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
+                                                        let vertical_str_val = vertical_str.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
                                                         let aim_height_val = aim_height.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
                                                         
                                                         con_mapper = Some(ConMapper::start(
@@ -390,6 +393,7 @@ fn main() -> eframe::Result {
                                                             inner_str_val,
                                                             deadzone_val,
                                                             hipfire_val,
+                                                            vertical_str_val,
                                                             aim_height_val
                                                         ));
                                                     } else {
@@ -469,24 +473,23 @@ fn main() -> eframe::Result {
                             // 置顶开关
                             ui.label("窗口置顶");
                             ui.add_enabled_ui(show_preview, |ui| {
-                                if ui.add(toggle_switch(&mut on_top)).clicked() {
-                                    if on_top {
-                                        ctx.send_viewport_cmd(
-                                            ViewportCommand::WindowLevel(
-                                                WindowLevel::AlwaysOnTop
-                                            )
-                                        );
-                                    } else {
-                                        ctx.send_viewport_cmd(
-                                            ViewportCommand::WindowLevel(
-                                                WindowLevel::Normal
-                                            )
-                                        );
-                                    }
-                                }
+                                ui.add(toggle_switch(&mut on_top));
                             });
                             ui.end_row();
                         };
+                        if on_top {
+                            ctx.send_viewport_cmd(
+                                ViewportCommand::WindowLevel(
+                                    WindowLevel::AlwaysOnTop
+                                )
+                            );
+                        } else {
+                            ctx.send_viewport_cmd(
+                                ViewportCommand::WindowLevel(
+                                    WindowLevel::Normal
+                                )
+                            );
+                        }
                     });
 
                 // 识别参数设置
@@ -635,7 +638,16 @@ fn main() -> eframe::Result {
                                 }
                                 ui.end_row();
                             });
-                            // 瞄准高度滑块（在反冲系数上方）
+                            // 垂直强度滑块
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                ui.label("垂直强度");
+                                let mut vertical_str_val = vertical_str.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
+                                if ui.add(egui::Slider::new(&mut vertical_str_val, 0.0..=1.0)).changed() {
+                                    *vertical_str.lock().unwrap() = format!("{:.2}", vertical_str_val);
+                                }
+                            });
+                            // 瞄准高度滑块
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
                                 ui.label("瞄准高度");
@@ -653,7 +665,7 @@ fn main() -> eframe::Result {
                     if ch.body_returned.is_some() {
                         ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
                             window_w + 40.0, 
-                            window_h + 254.0
+                            window_h + 280.0
                         )));
                         allow_mapping = false;
                     } else {
@@ -711,6 +723,7 @@ fn main() -> eframe::Result {
         inner_str: inner_str_for_save.lock().unwrap().clone(),
         deadzone: deadzone_for_save.lock().unwrap().clone(),
         hipfire: hipfire_for_save.lock().unwrap().clone(),
+        vertical_str: vertical_str_for_save.lock().unwrap().clone(),
         aim_height: aim_height_for_save.lock().unwrap().clone(),
         mouse_mode: mouse_mode_for_save.lock().unwrap().to_string(),
     });

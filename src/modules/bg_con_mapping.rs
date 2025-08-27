@@ -20,6 +20,7 @@ fn apply_right_trigger_adjustment(
     inner_str: f32,
     deadzone: f32,
     hipfire: f32,
+    vertical_str: f32,
     aim_height: f32,
     left_trigger_pressed: bool,
 ) {
@@ -39,7 +40,7 @@ fn apply_right_trigger_adjustment(
         0.0
     };
     let (x, y) = if dist > 0.0 {
-        (strength * dx / dist, -0.5 * strength * dy / dist)
+        (strength * dx / dist, -vertical_str * strength * dy / dist)
     } else {
         (0.0, 0.0)
     };
@@ -76,7 +77,7 @@ impl ConMapper {
         inner_str: f32,
         deadzone: f32,
         hipfire: f32,
-
+        vertical_str: f32, // 新增垂直强度参数
         aim_height: f32,  // 新增瞄准高度参数（暂未使用）
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -127,6 +128,7 @@ impl ConMapper {
                                         inner_str,
                                         deadzone,
                                         hipfire,
+                                        vertical_str,
                                         aim_height,
                                         left_trigger_pressed,
                                     );

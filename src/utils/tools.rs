@@ -16,6 +16,7 @@ pub struct UserConfig {
     pub inner_str: String,
     pub deadzone: String,
     pub hipfire: String,
+    pub vertical_str: String, // 垂直强度系数
     pub aim_height: String,
     pub mouse_mode: String, // 键鼠模式
 }
@@ -29,6 +30,7 @@ impl Default for UserConfig {
             inner_str: "0.4".to_string(),
             deadzone: "0.0".to_string(),
             hipfire: "0.6".to_string(),
+            vertical_str: "0.5".to_string(),
             aim_height: "0.6".to_string(),
             mouse_mode: "false".to_string(),
         }

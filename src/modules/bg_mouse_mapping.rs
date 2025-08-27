@@ -56,6 +56,7 @@ fn apply_left_click_adjustment(
     inner_size: f32,
     inner_str: f32,
     outer_str: f32,
+    vertical_str: f32,
     aim_height: f32,
 ) -> (f32, f32) {
     let center = outer_size / 2.0;
@@ -73,7 +74,7 @@ fn apply_left_click_adjustment(
         0.0
     };
     
-    let (x, y) = (strength * dx / dist, 0.5 * strength * dy / dist);
+    let (x, y) = (strength * dx / dist, vertical_str * strength * dy / dist);
 
     (x, y)
 }
@@ -91,6 +92,7 @@ impl MouseMapper {
         inner_size: f32,
         inner_str: f32,
         outer_str: f32,
+        vertical_str: f32, // 新增垂直强度参数
         aim_height: f32,  // 新增瞄准高度参数（暂未使用）
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -131,6 +133,7 @@ impl MouseMapper {
                                         inner_size,
                                         inner_str,
                                         outer_str,
+                                        vertical_str,
                                         aim_height,
                                     );
                                     
