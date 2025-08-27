@@ -56,7 +56,6 @@ fn apply_left_click_adjustment(
     inner_size: f32,
     inner_str: f32,
     outer_str: f32,
-    reverse_coef: f32,
     aim_height: f32,
 ) -> (f32, f32) {
     let center = outer_size / 2.0;
@@ -92,7 +91,6 @@ impl MouseMapper {
         inner_size: f32,
         inner_str: f32,
         outer_str: f32,
-        reverse_coef: f32, // 新增反向系数参数
         aim_height: f32,  // 新增瞄准高度参数（暂未使用）
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -133,7 +131,6 @@ impl MouseMapper {
                                         inner_size,
                                         inner_str,
                                         outer_str,
-                                        reverse_coef,
                                         aim_height,
                                     );
                                     

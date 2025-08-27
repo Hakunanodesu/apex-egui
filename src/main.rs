@@ -81,7 +81,7 @@ fn main() -> eframe::Result {
     let inner_str = Arc::new(Mutex::new(user_config.inner_str));
     let deadzone = Arc::new(Mutex::new(user_config.deadzone));
     let hipfire = Arc::new(Mutex::new(user_config.hipfire));
-    let reverse_coef = Arc::new(Mutex::new(user_config.reverse_coef));
+
     let aim_height = Arc::new(Mutex::new(user_config.aim_height));
     let mouse_mode = Arc::new(Mutex::new(user_config.mouse_mode.parse::<bool>().unwrap_or(false)));
     // =========================
@@ -93,13 +93,13 @@ fn main() -> eframe::Result {
     let inner_str_for_save = inner_str.clone();
     let deadzone_for_save = deadzone.clone();
     let hipfire_for_save = hipfire.clone();
-    let reverse_coef_for_save = reverse_coef.clone();
+
     let aim_height_for_save = aim_height.clone();
     let mouse_mode_for_save = mouse_mode.clone();
 
     let mut do_resize = true;
     let mut on_top = false;
-    let (window_w, window_h) = (280.0, 208.0);
+    let (window_w, window_h) = (280.0, 210.0);
     let options = NativeOptions {
         viewport: ViewportBuilder::default()
             .with_resizable(false),
@@ -347,7 +347,6 @@ fn main() -> eframe::Result {
                                                     let inner_val = inner_size.lock().unwrap().trim().parse::<f32>().unwrap_or(100.0);
                                                     let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                     let outer_str_val = outer_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
-                                                    let reverse_coef_val = reverse_coef.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
                                                     let aim_height_val = aim_height.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
                                                     mouse_mapper = Some(MouseMapper::start(
                                                         Some(det.result()),
@@ -355,7 +354,6 @@ fn main() -> eframe::Result {
                                                         inner_val,
                                                         inner_str_val,
                                                         outer_str_val,
-                                                        reverse_coef_val,
                                                         aim_height_val
                                                     ));
                                                 } else {
@@ -379,7 +377,6 @@ fn main() -> eframe::Result {
                                                         let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                         let deadzone_val = deadzone.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
                                                         let hipfire_val = hipfire.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
-                                                        let reverse_coef_val = reverse_coef.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
                                                         let aim_height_val = aim_height.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
                                                         
                                                         con_mapper = Some(ConMapper::start(
@@ -393,7 +390,6 @@ fn main() -> eframe::Result {
                                                             inner_str_val,
                                                             deadzone_val,
                                                             hipfire_val,
-                                                            reverse_coef_val,
                                                             aim_height_val
                                                         ));
                                                     } else {
@@ -648,15 +644,6 @@ fn main() -> eframe::Result {
                                     *aim_height.lock().unwrap() = format!("{:.2}", aim_height_val);
                                 }
                             });
-                            // 反冲系数滑块
-                            ui.add_space(4.0);
-                            ui.horizontal(|ui| {
-                                ui.label("反冲系数");
-                                let mut reverse_coef_val = reverse_coef.lock().unwrap().trim().parse::<f32>().unwrap_or(0.0);
-                                if ui.add(egui::Slider::new(&mut reverse_coef_val, 0.0..=1.0)).changed() {
-                                    *reverse_coef.lock().unwrap() = format!("{:.2}", reverse_coef_val);
-                                }
-                            });
                             
                             let outer = outer_f32.unwrap_or(0.0) / ctx.pixels_per_point();
                             let inner = inner_f32.unwrap_or(0.0) / ctx.pixels_per_point();
@@ -666,7 +653,7 @@ fn main() -> eframe::Result {
                     if ch.body_returned.is_some() {
                         ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
                             window_w + 40.0, 
-                            window_h + 282.0
+                            window_h + 254.0
                         )));
                         allow_mapping = false;
                     } else {
@@ -724,7 +711,6 @@ fn main() -> eframe::Result {
         inner_str: inner_str_for_save.lock().unwrap().clone(),
         deadzone: deadzone_for_save.lock().unwrap().clone(),
         hipfire: hipfire_for_save.lock().unwrap().clone(),
-        reverse_coef: reverse_coef_for_save.lock().unwrap().clone(),
         aim_height: aim_height_for_save.lock().unwrap().clone(),
         mouse_mode: mouse_mode_for_save.lock().unwrap().to_string(),
     });

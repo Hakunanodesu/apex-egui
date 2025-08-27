@@ -16,7 +16,6 @@ pub struct UserConfig {
     pub inner_str: String,
     pub deadzone: String,
     pub hipfire: String,
-    pub reverse_coef: String, // 反向系数
     pub aim_height: String,
     pub mouse_mode: String, // 键鼠模式
 }
@@ -30,8 +29,7 @@ impl Default for UserConfig {
             inner_str: "0.4".to_string(),
             deadzone: "0.0".to_string(),
             hipfire: "0.6".to_string(),
-            reverse_coef: "0.5".to_string(),
-            aim_height: "0.7".to_string(),
+            aim_height: "0.6".to_string(),
             mouse_mode: "false".to_string(),
         }
     }

@@ -20,7 +20,6 @@ fn apply_right_trigger_adjustment(
     inner_str: f32,
     deadzone: f32,
     hipfire: f32,
-    reverse_coef: f32,
     aim_height: f32,
     left_trigger_pressed: bool,
 ) {
@@ -55,21 +54,8 @@ fn apply_right_trigger_adjustment(
     let rx = (adjusted_x * 32767.0).clamp(-32768.0, 32767.0) as i16;
     let ry = (adjusted_y * 32767.0).clamp(-32768.0, 32767.0) as i16;
 
-    // 检查叠加后是否改变方向，如果改变则应用反向系数
-    let new_rx = mapped_state.thumb_rx.saturating_add(rx);
-    let new_ry = mapped_state.thumb_ry.saturating_add(ry);
-
-    if (mapped_state.thumb_rx > 0 && new_rx < 0) || (mapped_state.thumb_rx < 0 && new_rx > 0) {
-        mapped_state.thumb_rx = (reverse_coef * new_rx as f32) as i16;
-    } else {
-        mapped_state.thumb_rx = new_rx;
-    }
-
-    if (mapped_state.thumb_ry > 0 && new_ry < 0) || (mapped_state.thumb_ry < 0 && new_ry > 0) {
-        mapped_state.thumb_ry = (reverse_coef * new_ry as f32) as i16;
-    } else {
-        mapped_state.thumb_ry = new_ry;
-    }
+    mapped_state.thumb_rx = mapped_state.thumb_rx.saturating_add(rx);
+    mapped_state.thumb_ry = mapped_state.thumb_ry.saturating_add(ry);
 }
 
 pub struct ConMapper {
@@ -90,7 +76,7 @@ impl ConMapper {
         inner_str: f32,
         deadzone: f32,
         hipfire: f32,
-        reverse_coef: f32, // 新增反向系数参数
+
         aim_height: f32,  // 新增瞄准高度参数（暂未使用）
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -141,7 +127,6 @@ impl ConMapper {
                                         inner_str,
                                         deadzone,
                                         hipfire,
-                                        reverse_coef,
                                         aim_height,
                                         left_trigger_pressed,
                                     );

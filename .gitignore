@@ -1,4 +1,5 @@
 /target
 /logs
 *.onnx
+*.exe
 config.json
