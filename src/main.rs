@@ -76,6 +76,7 @@ fn main() -> eframe::Result {
     // ====== 配置文件读取 ======
     let user_config = load_config();
     let outer_size = Arc::new(Mutex::new(user_config.outer_size));
+    let mid_size = Arc::new(Mutex::new(user_config.mid_size));
     let inner_size = Arc::new(Mutex::new(user_config.inner_size));
     let outer_str = Arc::new(Mutex::new(user_config.outer_str));
     let inner_str = Arc::new(Mutex::new(user_config.inner_str));
@@ -88,6 +89,7 @@ fn main() -> eframe::Result {
 
     // 为保存配置克隆变量
     let outer_size_for_save = outer_size.clone();
+    let mid_size_for_save = mid_size.clone();
     let inner_size_for_save = inner_size.clone();
     let outer_str_for_save = outer_str.clone();
     let inner_str_for_save = inner_str.clone();
@@ -344,14 +346,17 @@ fn main() -> eframe::Result {
                                             if mouse_mapper.is_none() && detector.is_some() {
                                                 if let Some(det) = detector.as_ref() {
                                                     let outer_val = outer_size.lock().unwrap().trim().parse::<f32>().unwrap_or(320.0);
+                                                    let mid_val = mid_size.lock().unwrap().trim().parse::<f32>().unwrap_or(200.0);
                                                     let inner_val = inner_size.lock().unwrap().trim().parse::<f32>().unwrap_or(100.0);
                                                     let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                     let outer_str_val = outer_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                     let vertical_str_val = vertical_str.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
                                                     let aim_height_val = aim_height.lock().unwrap().trim().parse::<f32>().unwrap_or(0.5);
+                                                    
                                                     mouse_mapper = Some(MouseMapper::start(
                                                         Some(det.result()),
                                                         outer_val,
+                                                        mid_val,
                                                         inner_val,
                                                         inner_str_val,
                                                         outer_str_val,
@@ -374,6 +379,7 @@ fn main() -> eframe::Result {
                                                         let state = reader.state();
                                                         let ready = reader.ready();
                                                         let outer_val = outer_size.lock().unwrap().trim().parse::<f32>().unwrap_or(320.0);
+                                                        let mid_val = mid_size.lock().unwrap().trim().parse::<f32>().unwrap_or(200.0);
                                                         let inner_val = inner_size.lock().unwrap().trim().parse::<f32>().unwrap_or(100.0);
                                                         let outer_str_val = outer_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
                                                         let inner_str_val = inner_str.lock().unwrap().trim().parse::<f32>().unwrap_or(1.0);
@@ -388,6 +394,7 @@ fn main() -> eframe::Result {
                                                             ready,
                                                             Some(det.result()),
                                                             outer_val,
+                                                            mid_val,
                                                             inner_val,
                                                             outer_str_val,
                                                             inner_str_val,
@@ -462,7 +469,6 @@ fn main() -> eframe::Result {
                                     )));
                                 } else {
                                     do_resize = true;
-                                    on_top = false;
                                     ctx.send_viewport_cmd(
                                         ViewportCommand::WindowLevel(
                                             WindowLevel::Normal
@@ -472,9 +478,7 @@ fn main() -> eframe::Result {
                             }
                             // 置顶开关
                             ui.label("窗口置顶");
-                            ui.add_enabled_ui(show_preview, |ui| {
-                                ui.add(toggle_switch(&mut on_top));
-                            });
+                            ui.add(toggle_switch(&mut on_top));
                             ui.end_row();
                         };
                         if on_top {
@@ -502,6 +506,7 @@ fn main() -> eframe::Result {
                             show_param_curve(
                                 ui,
                                 &outer_size.lock().unwrap(),
+                                &mid_size.lock().unwrap(),
                                 &inner_size.lock().unwrap(),
                                 &outer_str.lock().unwrap(),
                                 &inner_str.lock().unwrap(),
@@ -512,10 +517,13 @@ fn main() -> eframe::Result {
                                     .unwrap_or(vec2(1920.0, 1080.0));
                             let max_size = monitor_size.y * ctx.pixels_per_point();
                             let mut outer_f32: Option<f32> = None;
+                            let mut mid_f32: Option<f32> = None;
                             let mut inner_f32: Option<f32> = None;
                             let mut outer_err = None;
+                            let mut mid_err = None;
                             let mut inner_err = None;
                             let mut outer_str_err = None;
+
                             let mut inner_str_err = None;
                             let mut deadzone_err = None;
                             let mut hipfire_err = None;
@@ -544,6 +552,22 @@ fn main() -> eframe::Result {
                                     }
                                 }
                             }
+                            {
+                                let mid_guard = mid_size.lock().unwrap();
+                                if !mid_guard.trim().is_empty() {
+                                    match mid_guard.trim().parse::<f32>() {
+                                        Ok(v) => {
+                                            if v > max_size {
+                                                mid_err = Some("超出最大值");
+                                            } else {
+                                                mid_f32 = Some(v);
+                                            }
+                                        },
+                                        Err(_) => mid_err = Some("格式错误"),
+                                    }
+                                }
+                            }
+
                             {
                                 let inner_guard = inner_size.lock().unwrap();
                                 if !inner_guard.trim().is_empty() {
@@ -607,6 +631,17 @@ fn main() -> eframe::Result {
                                     ui.label("");
                                 }
                                 ui.end_row();
+                                ui.label("中圈大小");
+                                let mut mid_guard = mid_size.lock().unwrap();
+                                ui.add(TextEdit::singleline(&mut *mid_guard).hint_text(""));
+                                ui.label(""); // 占位符，保持布局对齐
+                                ui.label(""); // 占位符，保持布局对齐
+                                if let Some(err) = mid_err {
+                                    ui.colored_label(Color32::RED, err);
+                                } else {
+                                    ui.label("");
+                                }
+                                ui.end_row();
                                 ui.label("内圈大小");
                                 let mut inner_guard = inner_size.lock().unwrap();
                                 ui.add(TextEdit::singleline(&mut *inner_guard).hint_text(""));
@@ -658,14 +693,15 @@ fn main() -> eframe::Result {
                             });
                             
                             let outer = outer_f32.unwrap_or(0.0) / ctx.pixels_per_point();
+                            let mid = mid_f32.unwrap_or(0.0) / ctx.pixels_per_point();
                             let inner = inner_f32.unwrap_or(0.0) / ctx.pixels_per_point();
-                            show_square_viewport(ctx, outer, inner, false);
-                            show_square_viewport(ctx, outer, inner, true);
+                            show_square_viewport(ctx, outer, mid, inner, false);
+                            show_square_viewport(ctx, outer, mid, inner, true);
                         });
                     if ch.body_returned.is_some() {
                         ctx.send_viewport_cmd(ViewportCommand::InnerSize(vec2(
                             window_w + 40.0, 
-                            window_h + 280.0
+                            window_h + 308.0
                         )));
                         allow_mapping = false;
                     } else {
@@ -718,6 +754,7 @@ fn main() -> eframe::Result {
     // ====== 配置文件写回 ======
     save_config(&UserConfig {
         outer_size: outer_size_for_save.lock().unwrap().clone(),
+        mid_size: mid_size_for_save.lock().unwrap().clone(),
         inner_size: inner_size_for_save.lock().unwrap().clone(),
         outer_str: outer_str_for_save.lock().unwrap().clone(),
         inner_str: inner_str_for_save.lock().unwrap().clone(),

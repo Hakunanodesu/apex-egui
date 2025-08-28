@@ -222,7 +222,7 @@ pub fn show_preview_panel(
     }
 }
 
-pub fn show_square_viewport(ctx: &Context, outer_size: f32, inner_size: f32, open: bool) {
+pub fn show_square_viewport(ctx: &Context, outer_size: f32, mid_size: f32, inner_size: f32, open: bool) {
     let vp_id = ViewportId::from_hash_of("rec_size");
     if open {
         let monitor_size = ctx.input(|i| i.viewport().monitor_size).unwrap_or(vec2(1920.0, 1080.0));
@@ -244,8 +244,11 @@ pub fn show_square_viewport(ctx: &Context, outer_size: f32, inner_size: f32, ope
                     let rect = ui.max_rect();
                     // 画大绿色正方形（铺满）
                     ui.painter().rect_filled(rect, 0.0, Color32::LIGHT_GREEN);
-                    // 画小红色正方形（居中，边长为inner_size）
+                    // 画中圈黄色正方形（居中，边长为mid_size）
                     let center = rect.center();
+                    let mid_rect = egui::Rect::from_center_size(center, egui::vec2(mid_size, mid_size));
+                    ui.painter().rect_filled(mid_rect, 0.0, egui::Color32::YELLOW);
+                    // 画小红色正方形（居中，边长为inner_size）
                     let inner_rect = egui::Rect::from_center_size(center, egui::vec2(inner_size, inner_size));
                     ui.painter().rect_filled(inner_rect, 0.0, egui::Color32::LIGHT_RED);
                 });
@@ -259,6 +262,7 @@ pub fn show_square_viewport(ctx: &Context, outer_size: f32, inner_size: f32, ope
 pub fn show_param_curve(
     ui: &mut egui::Ui,
     outer_size: &str,
+    mid_size: &str,
     inner_size: &str,
     outer_str: &str,
     inner_str: &str,
@@ -297,17 +301,24 @@ pub fn show_param_curve(
                 axis_color
             );
         }
-        // x轴刻度：0、innersize、outersize
+        // x轴刻度：0、innersize、midsize、outersize
         let outer_size_val = outer_size.trim().parse::<f32>().unwrap_or(320.0);
-        let inner_size_val = inner_size.trim().parse::<f32>().unwrap_or(0.0);
+        let mid_size_val = mid_size.trim().parse::<f32>().unwrap_or(200.0);
+        let inner_size_val = inner_size.trim().parse::<f32>().unwrap_or(80.0);
         let inner_x = if outer_size_val > 0.0 {
             (inner_size_val / outer_size_val).clamp(0.0, 1.0)
         } else {
             0.0
         };
+        let mid_x = if outer_size_val > 0.0 {
+            (mid_size_val / outer_size_val).clamp(0.0, 1.0)
+        } else {
+            0.5
+        };
         for &(x, label) in &[
             (0.0, "0"),
             (inner_x, &format!("{:.0}", inner_size_val)),
+            (mid_x, &format!("{:.0}", mid_size_val)),
             (1.0, &format!("{:.0}", outer_size_val)),
         ] {
             let p1 = to_screen(x, 0.0);
@@ -324,19 +335,22 @@ pub fn show_param_curve(
         let inner_y = inner_str.trim().parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0);
         let outer_y = outer_str.trim().parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0);
         let deadzone_y = deadzone.trim().parse::<f32>().unwrap_or(0.0).clamp(0.0, 1.0);
-        // 三个点
+        // 四个点
         let p0 = to_screen(0.0, deadzone_y);
         let p1 = to_screen(inner_x, inner_y);
-        let p2_start = to_screen(inner_x, outer_y);
-        let p2_end = to_screen(1.0, outer_y);
+        let p2 = to_screen(mid_x, inner_y);  // 中圈点使用内圈强度
+        let p3_start = to_screen(mid_x, outer_y);
+        let p3_end = to_screen(1.0, outer_y);
         // 连线
         painter.line_segment([p0, p1], egui::Stroke::new(2.0, egui::Color32::LIGHT_GRAY));
+        painter.line_segment([p1, p2], egui::Stroke::new(2.0, egui::Color32::LIGHT_GRAY));
         painter.circle_filled(p0, 5.0, egui::Color32::LIGHT_RED);
         painter.circle_filled(p1, 5.0, egui::Color32::LIGHT_RED);
-        // 画白色水平线从内圈大小到外圈大小
-        painter.line_segment([p2_start, p2_end], egui::Stroke::new(2.0, egui::Color32::WHITE));
+        painter.circle_filled(p2, 5.0, egui::Color32::YELLOW);
+        // 画白色水平线从中圈大小到外圈大小
+        painter.line_segment([p3_start, p3_end], egui::Stroke::new(2.0, egui::Color32::WHITE));
         // 在水平线两端加上绿色端点
-        painter.circle_filled(p2_start, 5.0, egui::Color32::LIGHT_GREEN);
-        painter.circle_filled(p2_end, 5.0, egui::Color32::LIGHT_GREEN);
+        painter.circle_filled(p3_start, 5.0, egui::Color32::LIGHT_GREEN);
+        painter.circle_filled(p3_end, 5.0, egui::Color32::LIGHT_GREEN);
     });
 }

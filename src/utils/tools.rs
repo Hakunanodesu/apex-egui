@@ -11,6 +11,7 @@ use std::fs;
 #[serde(default)]
 pub struct UserConfig {
     pub outer_size: String,
+    pub mid_size: String,
     pub inner_size: String,
     pub outer_str: String,
     pub inner_str: String,
@@ -25,6 +26,7 @@ impl Default for UserConfig {
     fn default() -> Self {
         Self {
             outer_size: "320".to_string(),
+            mid_size: "200".to_string(),
             inner_size: "80".to_string(),
             outer_str: "0.2".to_string(),
             inner_str: "0.4".to_string(),

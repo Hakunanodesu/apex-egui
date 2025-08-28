@@ -53,6 +53,7 @@ fn get_mouse_button_state() -> (bool, bool) {
 fn apply_left_click_adjustment(
     d: &Detection,
     outer_size: f32,
+    mid_size: f32,
     inner_size: f32,
     inner_str: f32,
     outer_str: f32,
@@ -65,11 +66,15 @@ fn apply_left_click_adjustment(
     let dist = ((dx * dx + dy * dy).sqrt()).min(center);
     
     let strength = if 
-        (dx.abs() <= inner_size / 2.0 && dy.abs() <= inner_size / 2.0) 
-        || (dx.abs() <= d.w / 2.0 && dy.abs() <= d.h / 2.0) 
+        dx.abs() <= inner_size / 2.0 && dy.abs() <= inner_size / 2.0
     {
         let t = if inner_size > 0.0 { dist / (inner_size / 2.0) } else { 1.0 };
         inner_str * t * 50.0
+    } else if 
+        (dx.abs() <= mid_size / 2.0 && dy.abs() <= mid_size / 2.0)
+        || (dx.abs() <= d.w / 2.0 && dy.abs() <= d.h / 2.0) 
+    {
+        inner_str * 50.0
     } else if 
         dx.abs() <= outer_size / 2.0 && dy.abs() <= outer_size / 2.0
     {
@@ -94,6 +99,7 @@ impl MouseMapper {
     pub fn start(
         det_result: Option<Arc<Mutex<Option<Vec<Detection>>>>>,
         outer_size: f32,
+        mid_size: f32,
         inner_size: f32,
         inner_str: f32,
         outer_str: f32,
@@ -135,6 +141,7 @@ impl MouseMapper {
                                     let (x, y) = apply_left_click_adjustment(
                                         d,
                                         outer_size,
+                                        mid_size,
                                         inner_size,
                                         inner_str,
                                         outer_str,
