@@ -195,13 +195,16 @@ impl DetectorThread {
             };
             let mut infer_count = 0;
             let mut last_time = std::time::Instant::now();
-            let mut last_buffer: Vec<u8> = Vec::new(); // 新增
+            let mut last_buffer: Vec<u8> = Vec::new();
+            let mut last_infer_time = std::time::Instant::now(); // 新增：记录上次推理时间
+            
             while !stop_flag_clone.load(Ordering::SeqCst) {
                 // 1. 拿到最新一帧
                 let buf_guard = buffer.lock().unwrap();
                 let slice: &[u8] = &buf_guard[..];
-                // 2. 只有 buffer 变化才推理
-                if slice != last_buffer.as_slice() {
+                // 2. 只有 buffer 变化且时间间隔大于8ms才推理
+                if slice != last_buffer.as_slice() && last_infer_time.elapsed() >= Duration::from_millis(8) {
+                    last_infer_time = std::time::Instant::now(); // 推理开始前就更新时间
                     match detector.detect(slice) {
                         Ok((detections, _ms)) => {
                             let mut res = result_clone.lock().unwrap();
@@ -222,7 +225,7 @@ impl DetectorThread {
                     last_time = std::time::Instant::now();
                 }
                 drop(buf_guard);
-                thread::sleep(Duration::from_millis(1));
+                // thread::sleep(Duration::from_millis(1));
             }
         });
 
