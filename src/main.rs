@@ -31,7 +31,7 @@ use crate::utils::{
         show_square_viewport, show_param_curve, show_add_game_window, truncate_text
     },
     bg_dl_instl::spawn_download_thread,
-    console_redirect::{ConsoleRedirector},
+    console_redirect::{ConsoleRedirector, log_error},
     config::{UserConfig, load_config, save_config, DeviceConfig, handle_config_changes},
 };
 use crate::modules::{
@@ -44,8 +44,14 @@ fn main() -> eframe::Result {
     let _console_redirector = ConsoleRedirector::init().unwrap();
     
     // 添加白名单 & 启动屏蔽 & 重枚举
-    run_hidhidecli(&["--app-reg", get_exe_path().unwrap().to_str().unwrap()]).unwrap();
-    run_hidhidecli(&["--cloak-on"]).unwrap();
+    // 尝试注册应用程序到 HidHide 白名单，如果失败则记录错误但不中断程序
+    if let Err(e) = run_hidhidecli(&["--app-reg", get_exe_path().unwrap().to_str().unwrap()]) {
+        log_error(&format!("警告: 无法注册应用程序到 HidHide 白名单: {}", e));
+    }
+    // 尝试启动 HidHide 屏蔽功能，如果失败则记录错误但不中断程序
+    if let Err(e) = run_hidhidecli(&["--cloak-on"]) {
+        log_error(&format!("警告: 无法启动 HidHide 屏蔽功能: {}", e));
+    }
 
     // 卡密
     let mut kami: String = String::new();
@@ -808,6 +814,9 @@ fn main() -> eframe::Result {
     
     save_config(&updated_config);
     // =========================
-    run_hidhidecli(&["--cloak-off"]).unwrap();
+    // 尝试关闭 HidHide 屏蔽功能，如果失败则记录错误但不中断程序退出
+    if let Err(e) = run_hidhidecli(&["--cloak-off"]) {
+        log_error(&format!("警告: 无法关闭 HidHide 屏蔽功能: {}", e));
+    }
     Ok(())
 }
