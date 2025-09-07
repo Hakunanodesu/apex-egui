@@ -170,7 +170,7 @@ fn main() -> eframe::Result {
                     || !matches!(dl_state_hidhide, DownloadState::Idle);
 
                 // ====== 状态机更新 ======
-                let (state_do_resize, _state_show_config, state_show_preview) = 
+                let (state_do_resize, _state_show_config, state_show_preview, state_disable_on_top) = 
                     mapping_manager.update(&mut con_exist, &mut pico_exist);
                 
                 if state_do_resize {
@@ -178,6 +178,9 @@ fn main() -> eframe::Result {
                 }
                 if state_show_preview && !show_preview {
                     show_preview = state_show_preview;
+                }
+                if state_disable_on_top {
+                    on_top = false;
                 }
                 // ========================
 

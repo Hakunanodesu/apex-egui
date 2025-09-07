@@ -139,10 +139,11 @@ impl MappingManager {
     }
     
     // 更新状态机
-    pub fn update(&mut self, con_exist: &mut bool, pico_exist: &mut bool) -> (bool, bool, bool) {
+    pub fn update(&mut self, con_exist: &mut bool, pico_exist: &mut bool) -> (bool, bool, bool, bool) {
         let mut do_resize = false;
         let mut show_config = false;
         let mut show_preview = false;
+        let mut disable_on_top = false;
         
         match &self.state.clone() {
             MappingState::Idle => {
@@ -236,7 +237,7 @@ impl MappingManager {
             
             MappingState::Running => {
                 // 定期检查错误（避免每帧都检查）
-                if self.last_error_check.elapsed().as_millis() > 100 {
+                if self.last_error_check.elapsed().as_millis() > 1000 {
                     if let Some(error_msg) = self.check_runtime_errors() {
                         self.state = MappingState::Error {
                             message: error_msg,
@@ -253,6 +254,7 @@ impl MappingManager {
                 self.state = MappingState::Idle;
                 do_resize = true;
                 show_preview = false;
+                disable_on_top = true;
             }
             
             MappingState::Error { message, from_state, _should_retry } => {
@@ -292,7 +294,7 @@ impl MappingManager {
             }
         }
         
-        (do_resize, show_config, show_preview)
+        (do_resize, show_config, show_preview, disable_on_top)
     }
     
     // 尝试启动屏幕捕获
