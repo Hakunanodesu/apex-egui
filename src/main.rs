@@ -65,7 +65,13 @@ fn main() -> eframe::Result {
     let mut dl_cancel_hidhide = Arc::new(AtomicBool::new(false));
     let mut installing = false;
 
-    let vg_client = Arc::new(Client::connect().unwrap());
+    let vg_client = match Client::connect() {
+        Ok(client) => Some(Arc::new(client)),
+        Err(e) => {
+            log_error(&format!("警告: 无法连接到 ViGEmBus 驱动: {}", e));
+            None
+        }
+    };
     let mut allow_mapping = true;
     let mut show_preview = false;
     let mut on_top = false;

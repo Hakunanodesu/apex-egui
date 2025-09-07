@@ -46,7 +46,7 @@ pub struct MappingManager {
     mouse_mapper: Option<MouseMapper>,
     
     // 配置参数
-    vg_client: Arc<Client>,
+    vg_client: Option<Arc<Client>>,
     current_model: String,
     outer_size: Arc<Mutex<String>>,
     mid_size: Arc<Mutex<String>>,
@@ -65,7 +65,7 @@ pub struct MappingManager {
 
 impl MappingManager {
     pub fn new(
-        vg_client: Arc<Client>,
+        vg_client: Option<Arc<Client>>,
         current_model: String,
         outer_size: Arc<Mutex<String>>,
         mid_size: Arc<Mutex<String>>,
@@ -362,12 +362,14 @@ impl MappingManager {
                     .ok_or("手柄读取器未初始化")?;
                 let det = self.detector.as_ref()
                     .ok_or("检测线程未初始化")?;
+                let vg_client = self.vg_client.as_ref()
+                    .ok_or("ViGEmBus 客户端未连接")?;
                 
                 let state = reader.state();
                 let ready = reader.ready();
                 
                 self.con_mapper = Some(ConMapper::start(
-                    state, self.vg_client.clone(), ready, Some(det.result()),
+                    state, vg_client.clone(), ready, Some(det.result()),
                     params.0, params.1, params.2, params.3, params.4,
                     params.5, params.8, params.6, params.7
                 ));
