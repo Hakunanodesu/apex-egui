@@ -5,7 +5,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use windows_capture::{
@@ -160,7 +160,7 @@ impl ScreenCapturer {
             CursorCaptureSettings::WithoutCursor,
             DrawBorderSettings::WithoutBorder,
             SecondaryWindowSettings::Default,
-            MinimumUpdateIntervalSettings::Custom(Duration::from_millis(1)),
+            MinimumUpdateIntervalSettings::Default, // 改为默认设置
             DirtyRegionSettings::Default,
             ColorFormat::Rgba8,
             // 把 running、buffer、sq、error_flag 打包传给 handler

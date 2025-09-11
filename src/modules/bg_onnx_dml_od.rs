@@ -264,7 +264,6 @@ impl DetectorThread {
             let mut infer_count = 0;
             let mut last_time = std::time::Instant::now();
             let mut last_buffer: Vec<u8> = Vec::new();
-            let mut last_infer_time = std::time::Instant::now();
             let mut consecutive_errors = 0;
             const MAX_CONSECUTIVE_ERRORS: u32 = 10;
             
@@ -288,9 +287,8 @@ impl DetectorThread {
                     buf_guard.clone()
                 };
                 
-                // 2. 只有 buffer 变化且时间间隔大于8ms才推理
-                if current_buffer != last_buffer && last_infer_time.elapsed() > Duration::from_millis(8) {
-                    last_infer_time = std::time::Instant::now();
+                // 2. 只有 buffer 变化才推理
+                if current_buffer != last_buffer {
                     match detector.detect(&current_buffer) {
                         Ok((detections, _ms)) => {
                             match result_clone.lock() {
@@ -335,6 +333,7 @@ impl DetectorThread {
                     infer_count = 0;
                     last_time = std::time::Instant::now();
                 }
+                thread::sleep(Duration::from_millis(1));
             }
         });
 
