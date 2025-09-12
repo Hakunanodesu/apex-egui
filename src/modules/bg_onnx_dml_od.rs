@@ -17,6 +17,7 @@ use crate::utils::console_redirect::log_error;
 /// 检测配置结构体
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DetectionConfig {
+    size: usize,        // 新增：推理尺寸
     conf_thres: f32,
     iou_thres: f32,
     classes: String, // JSON中以字符串形式存储，如"0,1,2"或"0"
@@ -25,6 +26,7 @@ struct DetectionConfig {
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
+            size: 320,      // 默认推理尺寸
             conf_thres: 0.4,
             iou_thres: 0.9,
             classes: "0".to_string(),
@@ -82,6 +84,7 @@ struct OnnxDetector {
     input_name: String,
     output_name: String,
     src_size: usize,
+    inference_size: usize,  // 新增：推理尺寸
     conf_thres: f32,
     iou_thres: f32,
     classes: Vec<usize>,
@@ -108,6 +111,7 @@ impl OnnxDetector {
             input_name,
             output_name,
             src_size,
+            inference_size: config.size,  // 使用配置中的推理尺寸
             conf_thres: config.conf_thres,
             iou_thres: config.iou_thres,
             classes: config.parse_classes(),
@@ -117,8 +121,9 @@ impl OnnxDetector {
     /// detect 里拿到 raw 输出后，用这三个参数来过滤和 NMS
     pub fn detect(&mut self, buffer: &[u8]) -> Result<(Vec<Detection>, f64)> {
         let start = std::time::Instant::now();
-        // resize 到 320x320
+        // resize 到配置的推理尺寸
         let src_size = self.src_size;
+        let inference_size = self.inference_size;
         let mut img = RgbImage::new(src_size as u32, src_size as u32);
         // CHW -> HWC
         for row in 0..src_size {
@@ -130,21 +135,21 @@ impl OnnxDetector {
                 img.put_pixel(col as u32, row as u32, image::Rgb([r, g, b]));
             }
         }
-        let resized = image::imageops::resize(&img, 320, 320, FilterType::Triangle);
+        let resized = image::imageops::resize(&img, inference_size as u32, inference_size as u32, FilterType::Triangle);
         // HWC -> CHW
-        let mut chw: Vec<u8> = vec![0; 3 * 320 * 320];
-        for row in 0..320 {
-            for col in 0..320 {
-                let pixel = resized.get_pixel(col, row).0;
-                let chw_idx = (row * 320 + col) as usize;
-                chw[0 * 320 * 320 + chw_idx] = pixel[0];
-                chw[1 * 320 * 320 + chw_idx] = pixel[1];
-                chw[2 * 320 * 320 + chw_idx] = pixel[2];
+        let mut chw: Vec<u8> = vec![0; 3 * inference_size * inference_size];
+        for row in 0..inference_size {
+            for col in 0..inference_size {
+                let pixel = resized.get_pixel(col as u32, row as u32).0;
+                let chw_idx = (row * inference_size + col) as usize;
+                chw[0 * inference_size * inference_size + chw_idx] = pixel[0];
+                chw[1 * inference_size * inference_size + chw_idx] = pixel[1];
+                chw[2 * inference_size * inference_size + chw_idx] = pixel[2];
             }
         }
         // 归一化并送入 ONNX
         let array: Array4<f32> = Array4::from_shape_vec(
-            (1, 3, 320, 320),
+            (1, 3, inference_size, inference_size),
             chw.iter().map(|&b| b as f32 / 255.0).collect(),
         )?;
 
@@ -182,7 +187,7 @@ impl OnnxDetector {
                     return None;
                 }
                 // 还原到原始尺寸
-                let scale = self.src_size as f32 / 320.0;
+                let scale = self.src_size as f32 / inference_size as f32;
                 Some(Detection {
                     x: row[0] * scale,
                     y: row[1] * scale,
@@ -246,9 +251,18 @@ impl DetectorThread {
         let fps_clone = fps.clone();
         let error_flag_clone = error_flag.clone();
 
+        // 从缓冲区大小计算实际的输入尺寸
+        let src_size = {
+            let buf = buffer.lock().unwrap();
+            let total_size = buf.len();
+            // CHW格式，所以总大小是 size * size * 3
+            let size = ((total_size as f64) / 3.0).sqrt() as usize;
+            size
+        };
+
         // 创建检测器
         let detector = match OnnxDetector::new(
-            320, // 固定输入尺寸
+            src_size, // 使用实际的输入尺寸
             model_path,
         ) {
             Ok(detector) => detector,

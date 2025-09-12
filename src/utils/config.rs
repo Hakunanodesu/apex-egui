@@ -35,7 +35,7 @@ impl DeviceConfig {
             outer_str: "0.1".to_string(),
             inner_str: "0.2".to_string(),
             init_str: "0.0".to_string(),
-            hipfire: "2.0".to_string(),
+            hipfire: "1.5".to_string(),
             vertical_str: "0.4".to_string(),
             aim_height: "0.6".to_string(),
         }

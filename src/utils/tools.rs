@@ -5,6 +5,7 @@ use egui::{Ui, TextStyle};
 
 use crate::modules::hidhide::run_hidhidecli;
 use crate::utils::ps_con_reenable::reenumerate;
+use crate::utils::console_redirect::log_error;
 
 /// 返回所有 vendor ID 为指定值的 HID 设备实例列表
 pub fn get_hid_instance() -> Vec<String> {
@@ -103,6 +104,7 @@ pub fn get_text_width(ui: &Ui, text: impl Into<String>, text_style: TextStyle) -
 
 /// 枚举models目录下的所有ONNX文件
 /// 返回文件名列表（不包含路径）
+/// 如果models目录不存在，会自动创建
 pub fn enumerate_onnx_files() -> Vec<String> {
     let current_dir = match env::current_dir() {
         Ok(dir) => dir,
@@ -111,6 +113,14 @@ pub fn enumerate_onnx_files() -> Vec<String> {
 
     let models_dir = current_dir.join("models");
     let mut onnx_files = Vec::new();
+    
+    // 如果models目录不存在，则创建它
+    if !models_dir.exists() {
+        if let Err(e) = std::fs::create_dir_all(&models_dir) {
+            log_error(&format!("创建models目录失败: {}", e));
+            return Vec::new();
+        }
+    }
     
     if let Ok(entries) = std::fs::read_dir(&models_dir) {
         for entry in entries {
