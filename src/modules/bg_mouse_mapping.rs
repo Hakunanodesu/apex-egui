@@ -111,8 +111,8 @@ impl MouseMapper {
         outer_size: f32,
         mid_size: f32,
         inner_size: f32,
-        inner_str: f32,
         outer_str: f32,
+        inner_str: f32,
         init_str: f32,
         vertical_str: f32, // 新增垂直强度参数
         aim_height: f32,  // 新增瞄准高度参数（暂未使用）
