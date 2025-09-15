@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, Mutex, atomic::Ordering},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
     time::Instant,
 };
 use vigem_client::Client;
@@ -48,6 +48,7 @@ pub struct MappingManager {
     // 配置参数
     vg_client: Option<Arc<Client>>,
     current_model: String,
+    aim_enable: Arc<AtomicBool>, // 瞄准辅助开关
     outer_size: Arc<Mutex<String>>,
     mid_size: Arc<Mutex<String>>,
     inner_size: Arc<Mutex<String>>,
@@ -67,6 +68,7 @@ impl MappingManager {
     pub fn new(
         vg_client: Option<Arc<Client>>,
         current_model: String,
+        aim_enable: Arc<AtomicBool>, // 瞄准辅助开关
         outer_size: Arc<Mutex<String>>,
         mid_size: Arc<Mutex<String>>,
         inner_size: Arc<Mutex<String>>,
@@ -87,6 +89,7 @@ impl MappingManager {
             mouse_mapper: None,
             vg_client,
             current_model,
+            aim_enable,
             outer_size,
             mid_size,
             inner_size,
@@ -353,7 +356,7 @@ impl MappingManager {
                 self.mouse_mapper = Some(MouseMapper::start(
                     Some(det.result()),
                     params.0, params.1, params.2, params.3, params.4,
-                    params.5, params.6, params.7, params.8
+                    params.5, params.6, params.7, params.8, self.aim_enable.clone()
                 ));
             }
         } else {
@@ -371,7 +374,7 @@ impl MappingManager {
                 self.con_mapper = Some(ConMapper::start(
                     state, vg_client.clone(), ready, Some(det.result()),
                     params.0, params.1, params.2, params.3, params.4,
-                    params.5, params.8, params.6, params.7
+                    params.5, params.6, params.7, params.8, self.aim_enable.clone()
                 ));
             }
         }
@@ -493,6 +496,11 @@ impl MappingManager {
     // 更新配置
     pub fn update_config(&mut self, current_model: String) {
         self.current_model = current_model;
+    }
+    
+    // 更新瞄准辅助开关
+    pub fn update_aim_enable(&mut self, aim_enable: bool) {
+        self.aim_enable.store(aim_enable, Ordering::SeqCst);
     }
 
     // 提供对组件的只读访问，用于UI显示

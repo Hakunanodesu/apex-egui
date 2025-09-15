@@ -90,9 +90,10 @@ impl ConMapper {
         outer_str: f32,
         inner_str: f32,
         init_str: f32,
-        hipfire: f32,
         vertical_str: f32, // 新增垂直强度参数
-        aim_height: f32,  // 新增瞄准高度参数（暂未使用）
+        aim_height: f32,  // 新增瞄准高度参数
+        hipfire: f32,
+        aim_enable: Arc<AtomicBool>, // 新增瞄准辅助开关
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let error_flag = Arc::new(AtomicBool::new(false));
@@ -161,8 +162,9 @@ impl ConMapper {
                             
                             if let Some(detections) = &*det_guard {
                                 if let Some(d) = detections.first() {
-                                    // 只有当右扳机按下时才计算并应用结果
-                                    if right_trigger_pressed {
+                                    // 当右扳机按下时总是计算并应用结果
+                                    // 当aim_enable为true且左扳机按下时也计算并应用结果
+                                    if right_trigger_pressed || (aim_enable.load(Ordering::SeqCst) && left_trigger_pressed) {
                                         // 应用映射（10-254和255都应用）
                                         apply_right_trigger_adjustment(
                                             &mut mapped_state,

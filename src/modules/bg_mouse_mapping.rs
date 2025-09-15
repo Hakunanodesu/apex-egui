@@ -117,6 +117,7 @@ impl MouseMapper {
         vertical_str: f32, // 新增垂直强度参数
         aim_height: f32,  // 新增瞄准高度参数（暂未使用）
         hipfire: f32,
+        aim_enable: Arc<AtomicBool>, // 新增瞄准辅助开关
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let error_flag = Arc::new(AtomicBool::new(false));
@@ -153,8 +154,9 @@ impl MouseMapper {
                             
                             if let Some(detections) = &*det_guard {
                                 if let Some(d) = detections.first() {
-                                    // 只有当鼠标右键按下时才计算并应用结果
-                                    if left_button_pressed {
+                                    // 当鼠标左键按下时总是计算并应用结果
+                                    // 当aim_enable为true且右键按下时也计算并应用结果
+                                    if left_button_pressed || (aim_enable.load(Ordering::SeqCst) && right_button_pressed) {
                                         // 应用映射
                                         let (x, y) = apply_left_click_adjustment(
                                             d,
@@ -184,8 +186,8 @@ impl MouseMapper {
                                         
                                         // 只有当累积误差足够大时才发送移动指令
                                         if move_x != 0 || move_y != 0 {
-                                            println!("x: {}, y: {}, error_x: {:.3}, error_y: {:.3}", 
-                                                    move_x, move_y, error_x, error_y);
+                                            // println!("x: {}, y: {}, error_x: {:.3}, error_y: {:.3}", 
+                                            //         move_x, move_y, error_x, error_y);
                                             // 发送鼠标移动指令到串口设备
                                             if let Err(e) = send_mouse_move(&mut *port_guard, move_x, move_y) {
                                                 log_error(&format!("发送鼠标移动指令失败: {}", e));

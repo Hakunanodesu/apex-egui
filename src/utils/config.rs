@@ -23,6 +23,7 @@ pub struct UserConfig {
     pub current_profile: String,    // 当前选择的配置
     pub current_device: String,  // 当前选择的设备类型 ("mouse" 或 "controller")
     pub current_model: String,   // 当前选择的模型文件名
+    pub current_aim_enable: bool, // 当前瞄准辅助开关
     pub profiles: HashMap<String, HashMap<String, DeviceConfig>>, // profile -> device_type -> config
 }
 
@@ -75,6 +76,7 @@ impl Default for UserConfig {
             current_profile: "apexlegends".to_string(),  // 默认选择第一个游戏
             current_device: "mouse".to_string(),
             current_model: "apexlegends.onnx".to_string(), // 默认模型
+            current_aim_enable: false, // 默认关闭瞄准辅助
             profiles,
         }
     }
@@ -135,7 +137,9 @@ pub fn handle_config_changes(
     current_profile: &mut String,
     current_device: &mut String,
     current_model: &mut String,
+    current_aim_enable: &mut bool,
     is_mouse_mode: bool,
+    aim_enable: bool,
     outer_size: &Arc<Mutex<String>>,
     mid_size: &Arc<Mutex<String>>,
     inner_size: &Arc<Mutex<String>>,
@@ -149,7 +153,7 @@ pub fn handle_config_changes(
     let new_device = if is_mouse_mode { "mouse" } else { "controller" };
     
     // 检查是否有变化
-    if selected_profile != *current_profile || new_device != *current_device || selected_model != *current_model {
+    if selected_profile != *current_profile || new_device != *current_device || selected_model != *current_model || aim_enable != *current_aim_enable {
         // 保存当前参数到旧的配置
         let device_config = DeviceConfig {
             outer_size: outer_size.lock().unwrap().clone(),
@@ -169,10 +173,11 @@ pub fn handle_config_changes(
             profile_config.insert(current_device.clone(), device_config);
         }
         
-        // 更新当前游戏、设备和模型
+        // 更新当前游戏、设备、模型和瞄准开关
         updated_config.current_profile = selected_profile.to_string();
         updated_config.current_device = new_device.to_string();
         updated_config.current_model = selected_model.to_string();
+        updated_config.current_aim_enable = aim_enable;
         save_config(&updated_config);
 
         // 加载新的配置
@@ -191,10 +196,11 @@ pub fn handle_config_changes(
             }
         }
 
-        // 更新内存中的当前游戏、设备和模型
+        // 更新内存中的当前游戏、设备、模型和瞄准开关
         *current_profile = selected_profile.to_string();
         *current_device = new_device.to_string();
         *current_model = selected_model.to_string();
+        *current_aim_enable = aim_enable;
         
         true // 发生了变化
     } else {

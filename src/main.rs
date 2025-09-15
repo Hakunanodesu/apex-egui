@@ -2,9 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    sync::Arc,
-    sync::Mutex,
-    sync::atomic::AtomicBool,
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
 };
 use eframe::{
     {NativeOptions, run_simple_native},
@@ -82,6 +80,7 @@ fn main() -> eframe::Result {
     let mut current_profile = user_config.current_profile.clone();
     let mut current_device = user_config.current_device.clone();
     let mut current_model = user_config.current_model.clone();
+    let current_aim_enable = Arc::new(AtomicBool::new(user_config.current_aim_enable)); // 瞄准辅助开关
     let mut selected_profile = current_profile.clone();
     let mut selected_model = current_model.clone();
     let mut show_add_game_dialog = false;
@@ -109,6 +108,7 @@ fn main() -> eframe::Result {
     let mut mapping_manager = MappingManager::new(
         vg_client.clone(),
         current_model.clone(),
+        current_aim_enable.clone(), // 瞄准辅助开关
         outer_size.clone(),
         mid_size.clone(),
         inner_size.clone(),
@@ -131,9 +131,10 @@ fn main() -> eframe::Result {
     let vertical_str_for_save = vertical_str.clone();
     let aim_height_for_save = aim_height.clone();
     let mouse_mode_for_save = mouse_mode.clone();
+    let current_aim_enable_for_save = current_aim_enable.clone();
 
     let mut do_resize = true;
-    let (window_w, window_h) = (260.0, 272.0);
+    let (window_w, window_h) = (260.0, 300.0);
     let options = NativeOptions {
         viewport: ViewportBuilder::default()
             .with_resizable(false),
@@ -197,13 +198,17 @@ fn main() -> eframe::Result {
                 // ========================
 
                 // 检查配置变化
+                let mut aim_enable_value = current_aim_enable.load(Ordering::Relaxed); // 获取当前值
+                let aim_enable_copy = aim_enable_value; // 复制值避免借用冲突
                 if handle_config_changes(
                     &selected_profile,
                     &selected_model,
                     &mut current_profile,
                     &mut current_device,
                     &mut current_model,
+                    &mut aim_enable_value, // 传递可变引用
                     mouse_mode.lock().unwrap().clone(),
+                    aim_enable_copy, // 使用复制的值
                     &outer_size,
                     &mid_size,
                     &inner_size,
@@ -216,8 +221,10 @@ fn main() -> eframe::Result {
                 ) {
                     // 参数发生变化，强制重新渲染
                     ctx.request_repaint();
-                    // 同步配置到状态机
                     mapping_manager.update_config(current_model.clone());
+                    // 更新AtomicBool的值
+                    current_aim_enable.store(aim_enable_value, Ordering::Relaxed);
+                    mapping_manager.update_aim_enable(aim_enable_value);
                 }
 
                 // —— 第一行：选择游戏 开关 —— 
@@ -460,6 +467,23 @@ fn main() -> eframe::Result {
                             }
                         });
                         ui.end_row();
+
+                        ui.label("键鼠模式");
+                        {
+                            let mut mouse_mode_guard = mouse_mode.lock().unwrap();
+                            ui.add_enabled_ui(!mapping_manager.is_active(), |ui| {
+                                ui.add(toggle_switch(&mut *mouse_mode_guard))
+                            });
+                        }
+                        ui.label("瞄准启用");
+                        {
+                            let mut aim_enable_ui = current_aim_enable.load(Ordering::Relaxed);
+                            if ui.add(toggle_switch(&mut aim_enable_ui)).changed() {
+                                current_aim_enable.store(aim_enable_ui, Ordering::Relaxed);
+                                mapping_manager.update_aim_enable(aim_enable_ui);
+                            }
+                        }
+                        ui.end_row();
             
                         // —— 第六行：智能映射 开关 —— 
                         ui.label("智能映射");
@@ -485,13 +509,6 @@ fn main() -> eframe::Result {
                                 }
                             }
                         });
-                        ui.label("键鼠模式");
-                        {
-                            let mut mouse_mode_guard = mouse_mode.lock().unwrap();
-                            ui.add_enabled_ui(!mapping_manager.is_active(), |ui| {
-                                ui.add(toggle_switch(&mut *mouse_mode_guard))
-                            });
-                        }
                         ui.end_row();
                         
                         if mapping_manager.is_active() {
@@ -818,6 +835,7 @@ fn main() -> eframe::Result {
     // 模型选择通过handle_config_changes处理，这里保持最新值
     let latest_config = load_config();
     updated_config.current_model = latest_config.current_model;
+    updated_config.current_aim_enable = current_aim_enable_for_save.load(Ordering::Relaxed); // 保存瞄准辅助开关状态
     
     save_config(&updated_config);
     // =========================
