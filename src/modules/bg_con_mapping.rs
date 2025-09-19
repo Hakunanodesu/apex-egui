@@ -35,18 +35,19 @@ fn apply_right_trigger_adjustment(
     {
         // inner区间，线性递减
         let t = if inner_size > 0.0 { dist / (inner_size / 2.0) } else { 1.0 };
-        init_str * (1.0 - t) + inner_str * t
+        let temp = init_str * (1.0 - t) + inner_str * t;
+        temp * temp
     } else if 
         (dx.abs() <= mid_size / 2.0 && dy.abs() <= mid_size / 2.0)
         || (dx.abs() <= d.w / 2.0 && dy.abs() <= d.h / 2.0)
     {
         // outer区间
-        inner_str
+        inner_str * inner_str
     } else if 
         dx.abs() <= outer_size / 2.0 && dy.abs() <= outer_size / 2.0
     {
         // outer区间
-        outer_str
+        outer_str * outer_str
     } else {
         // 超出outer区间
         0.0
