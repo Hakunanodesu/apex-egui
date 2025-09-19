@@ -74,7 +74,7 @@ fn apply_left_click_adjustment(
         dx.abs() <= inner_size / 2.0 && dy.abs() <= inner_size / 2.0
     {
         let t = if inner_size > 0.0 { dist / (inner_size / 2.0) } else { 1.0 };
-        (init_str * (1.0 - t) + inner_str * t) * 50.0
+        (init_str * (1.0 - t) + inner_str * t) * 20.0
     } else if 
         (dx.abs() <= mid_size / 2.0 && dy.abs() <= mid_size / 2.0)
         || (dx.abs() <= d.w / 2.0 && dy.abs() <= d.h / 2.0) 
