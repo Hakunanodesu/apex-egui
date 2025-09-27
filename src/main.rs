@@ -70,7 +70,6 @@ fn main() -> eframe::Result {
             None
         }
     };
-    let mut allow_mapping = true;
     let mut show_preview = false;
     let mut on_top = false;
     let mut _show_config = false;
@@ -491,7 +490,6 @@ fn main() -> eframe::Result {
                             (
                                 con_exist 
                                 && !installing 
-                                && allow_mapping 
                                 && !mouse_mode.lock().unwrap().clone()
                             ) 
                             || (
@@ -759,10 +757,8 @@ fn main() -> eframe::Result {
                             window_w, 
                             window_h + 308.0
                         )));
-                        allow_mapping = false;
                     } else {
                         do_resize = true;
-                        allow_mapping = true;
                     }
                 }
 
