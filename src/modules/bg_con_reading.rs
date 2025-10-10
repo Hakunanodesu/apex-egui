@@ -7,7 +7,6 @@ use std::{
     thread::{self, JoinHandle},
     time::Duration,
 };
-use sdl2::sys;
 use sdl2::{
     event::{Event, EventType},
     joystick::HatState,
@@ -128,7 +127,7 @@ pub struct ConReader {
 
 impl ConReader {
     /// 启动线程，返回一个实例
-    pub fn start() -> Self {
+    pub fn start(is_ps_config: bool) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let state = Arc::new(Mutex::new(XGamepad::default()));
         let ready_flag = Arc::new(AtomicBool::new(false));
@@ -213,23 +212,17 @@ impl ConReader {
             // 循环处理
             while !stop_clone.load(Ordering::SeqCst) {
                 for evt in pump.poll_iter() {
-                    let which = match evt {
-                        Event::JoyAxisMotion { which, .. }
-                        | Event::JoyButtonDown { which, .. }
-                        | Event::JoyButtonUp { which, .. }
-                        | Event::JoyHatMotion { which, .. } => which,
+                    // 过滤手柄事件
+                    match evt {
+                        Event::JoyAxisMotion { .. }
+                        | Event::JoyButtonDown { .. }
+                        | Event::JoyButtonUp { .. }
+                        | Event::JoyHatMotion { .. } => {},
                         _ => continue,
                     };
 
-                    // 查 vendor
-                    let vid = id_map
-                        .iter()
-                        .find_map(|&(iid, dev_idx)| if iid == which { Some(dev_idx) } else { None })
-                        .map(|dev_idx| unsafe {
-                            sys::SDL_JoystickGetDeviceVendor(dev_idx as i32) as u16
-                        })
-                        .unwrap_or(0);
-                    let is_ps = vid == 0x054C;
+                    // 使用配置的 is_ps 值
+                    let is_ps = is_ps_config;
 
                     // 分发事件到状态
                     match state_clone.lock() {

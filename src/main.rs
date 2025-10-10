@@ -80,6 +80,7 @@ fn main() -> eframe::Result {
     let mut current_device = user_config.current_device.clone();
     let mut current_model = user_config.current_model.clone();
     let current_aim_enable = Arc::new(AtomicBool::new(user_config.current_aim_enable)); // 瞄准辅助开关
+    let mut is_ps = user_config.ps_controller; // PS 手柄开关
     let mut selected_profile = current_profile.clone();
     let mut selected_model = current_model.clone();
     let mut show_add_game_dialog = false;
@@ -108,6 +109,7 @@ fn main() -> eframe::Result {
         vg_client.clone(),
         current_model.clone(),
         current_aim_enable.clone(), // 瞄准辅助开关
+        is_ps, // PS 手柄开关
         outer_size.clone(),
         mid_size.clone(),
         inner_size.clone(),
@@ -507,6 +509,14 @@ fn main() -> eframe::Result {
                                 }
                             }
                         });
+                        if !mouse_mode.lock().unwrap().clone() {
+                            ui.label("PS 手柄");
+                            ui.add_enabled_ui(!mapping_manager.is_active(), |ui| {
+                                if ui.add(toggle_switch(&mut is_ps)).changed() {
+                                    mapping_manager.update_is_ps(is_ps);
+                                }
+                            });
+                        }
                         ui.end_row();
                         
                         if mapping_manager.is_active() {
@@ -832,6 +842,7 @@ fn main() -> eframe::Result {
     let latest_config = load_config();
     updated_config.current_model = latest_config.current_model;
     updated_config.current_aim_enable = current_aim_enable_for_save.load(Ordering::Relaxed); // 保存瞄准辅助开关状态
+    updated_config.ps_controller = is_ps; // 保存 PS 手柄开关状态
     
     save_config(&updated_config);
     // =========================

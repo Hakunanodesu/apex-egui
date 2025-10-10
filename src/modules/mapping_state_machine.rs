@@ -49,6 +49,7 @@ pub struct MappingManager {
     vg_client: Option<Arc<Client>>,
     current_model: String,
     aim_enable: Arc<AtomicBool>, // 瞄准辅助开关
+    is_ps: bool, // PS 手柄开关
     outer_size: Arc<Mutex<String>>,
     mid_size: Arc<Mutex<String>>,
     inner_size: Arc<Mutex<String>>,
@@ -69,6 +70,7 @@ impl MappingManager {
         vg_client: Option<Arc<Client>>,
         current_model: String,
         aim_enable: Arc<AtomicBool>, // 瞄准辅助开关
+        is_ps: bool, // PS 手柄开关
         outer_size: Arc<Mutex<String>>,
         mid_size: Arc<Mutex<String>>,
         inner_size: Arc<Mutex<String>>,
@@ -90,6 +92,7 @@ impl MappingManager {
             vg_client,
             current_model,
             aim_enable,
+            is_ps,
             outer_size,
             mid_size,
             inner_size,
@@ -215,7 +218,7 @@ impl MappingManager {
                 // 仅在手柄模式下
                 if !self.mouse_mode {
                     if self.con_reader.is_none() {
-                        self.con_reader = Some(ConReader::start());
+                        self.con_reader = Some(ConReader::start(self.is_ps));
                     }
                 }
                 self.state = MappingState::StartingMapper;
@@ -501,6 +504,10 @@ impl MappingManager {
     // 更新瞄准辅助开关
     pub fn update_aim_enable(&mut self, aim_enable: bool) {
         self.aim_enable.store(aim_enable, Ordering::SeqCst);
+    }
+
+    pub fn update_is_ps(&mut self, is_ps: bool) {
+        self.is_ps = is_ps;
     }
 
     // 提供对组件的只读访问，用于UI显示

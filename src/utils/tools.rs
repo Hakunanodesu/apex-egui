@@ -17,6 +17,7 @@ pub fn get_hid_instance() -> Vec<String> {
     for device in api.device_list() {
         if device.vendor_id() == 0x054c // Playstation
             || device.vendor_id() == 0x045e // Xbox
+            || device.vendor_id() == 0x413d // Mojhon
         {
             let raw = device.path().to_string_lossy();
             // 拆分
@@ -55,15 +56,15 @@ pub fn enumerate_controllers() -> bool {
     
     // 如果没有找到任何 HID 设备，返回 false
     if hid_instances.is_empty() {
-        return false;
+        return true;
     }
     
     // 隐藏所有通过 get_hid_instance() 获取到的设备
     for path in hid_instances {
         // 这里根据你的 run_hidhidecli 签名调整参数传递
-        run_hidhidecli(&["--dev-hide", &path]).unwrap();
+        // run_hidhidecli(&["--dev-hide", &path]).unwrap();
     }
-    reenumerate();
+    // reenumerate();
 
     true
 }

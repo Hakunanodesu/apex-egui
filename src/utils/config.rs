@@ -24,6 +24,7 @@ pub struct UserConfig {
     pub current_device: String,  // 当前选择的设备类型 ("mouse" 或 "controller")
     pub current_model: String,   // 当前选择的模型文件名
     pub current_aim_enable: bool, // 当前瞄准辅助开关
+    pub ps_controller: bool, // PS 手柄开关
     pub profiles: HashMap<String, HashMap<String, DeviceConfig>>, // profile -> device_type -> config
 }
 
@@ -77,6 +78,7 @@ impl Default for UserConfig {
             current_device: "mouse".to_string(),
             current_model: "apexlegends.onnx".to_string(), // 默认模型
             current_aim_enable: false, // 默认关闭瞄准辅助
+            ps_controller: false, // 默认关闭 PS 手柄
             profiles,
         }
     }
