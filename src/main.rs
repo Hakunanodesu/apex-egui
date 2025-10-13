@@ -187,7 +187,7 @@ fn main() -> eframe::Result {
             fonts.font_data.insert(
                 "noto_sans_sc".to_owned(),
                 Arc::new(FontData::from_static(
-                    include_bytes!("fonts/NotoSansCJKsc-Regular.otf")
+                    include_bytes!("../fonts/NotoSansCJKsc-Regular.otf")
                 )),
             );
             let prop = fonts
@@ -198,7 +198,7 @@ fn main() -> eframe::Result {
             fonts.font_data.insert(
                 "emoji_glyf".to_owned(),
                 Arc::new(FontData::from_static(
-                    include_bytes!("fonts/OpenMoji-black-glyf.ttf")
+                    include_bytes!("../fonts/OpenMoji-black-glyf.ttf")
                 )),
             );
             prop.push("emoji_glyf".to_owned());

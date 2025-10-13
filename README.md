@@ -71,9 +71,9 @@ src/
 │   ├── ps_con_reenable.rs     # 设备重枚举
 │   ├── bg_dl_instl.rs         # 后台下载安装
 │   └── mod.rs
-└── fonts/                      # 内嵌字体资源
-    ├── NotoSansCJKsc-Regular.otf
-    └── OpenMoji-black-glyf.ttf
+├── fonts/                      # 内嵌字体资源
+│   ├── NotoSansCJKsc-Regular.otf
+│   └── OpenMoji-black-glyf.ttf
 ```
 
 ## ⚙️ 配置说明
