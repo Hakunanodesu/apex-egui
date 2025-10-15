@@ -1,6 +1,7 @@
-/target
-/logs
-/models
+/.cargo/
+/target/
+/logs/
+/models/
 *.onnx
 *.exe
 config.json
