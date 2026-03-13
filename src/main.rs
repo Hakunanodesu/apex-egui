@@ -293,7 +293,7 @@ impl Default for MyApp {
             rapid_fire_mode_selected: "不启用连点".to_string(),
             rapid_fire_mode_items: vec![
                 "不启用连点".to_string(),
-                "OCR 识别".to_string(),
+                "根据枪械自动切换".to_string(),
                 "半按扳机连点".to_string(),
                 "始终连点".to_string(),
             ],
