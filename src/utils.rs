@@ -92,6 +92,8 @@ pub struct ConfigFile {
     pub vertical_strength_coefficient: f32,
     #[serde(default)]
     pub con_mapping: Option<ConMapping>,
+    #[serde(default)]
+    pub rapid_fire_mode: String,
 }
 
 /// 读取 configs/.current 文件，返回当前配置和模型

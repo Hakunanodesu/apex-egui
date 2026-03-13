@@ -1,5 +1,5 @@
 pub mod mapping_state_machine;
-pub mod bg_con_mapping;
-pub mod bg_con_reading;
-pub mod bg_onnx_dml_od;
-pub mod bg_screen_cap;
+pub mod gamepad_mapping_thread;
+pub mod gamepad_reading_thread;
+pub mod onnx_dml_thread;
+pub mod screen_capture_thread;

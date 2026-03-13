@@ -1,15 +1,15 @@
 use std::{
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU8, Ordering}},
     time::Instant,
 };
 use vigem_client::{Client, Xbox360Wired};
 
 use crate::utils::ConMapping;
 use crate::modules::{
-    bg_con_reading::ConReader,
-    bg_con_mapping::ConMapper,
-    bg_screen_cap::ScreenCapturer,
-    bg_onnx_dml_od::DetectorThread,
+    gamepad_reading_thread::ConReader,
+    gamepad_mapping_thread::ConMapper,
+    screen_capture_thread::ScreenCapturer,
+    onnx_dml_thread::DetectorThread,
 };
 use crate::utils::{
     enum_device_tool::enumerate_controllers,
@@ -56,7 +56,7 @@ pub struct MappingManager {
     hipfire: Arc<Mutex<String>>,
     vertical_str: Arc<Mutex<String>>,
     aim_height: Arc<Mutex<String>>,
-    rt_rapid_fire: Arc<AtomicBool>, // 右扳机连点开关
+    rapid_fire_mode: Arc<AtomicU8>, // 连点模式：0=关闭, 1=始终连点, 2=半按扳机连点
     
     // 状态标志
     device_available: bool,
@@ -76,7 +76,7 @@ impl MappingManager {
         hipfire: Arc<Mutex<String>>,
         vertical_str: Arc<Mutex<String>>,
         aim_height: Arc<Mutex<String>>,
-        rt_rapid_fire: Arc<AtomicBool>,
+        rapid_fire_mode: Arc<AtomicU8>,
     ) -> Self {
         Self {
             state: MappingState::Idle,
@@ -96,7 +96,7 @@ impl MappingManager {
             hipfire,
             vertical_str,
             aim_height,
-            rt_rapid_fire,
+            rapid_fire_mode,
             device_available: false,
             last_error_check: Instant::now(),
         }
@@ -358,7 +358,7 @@ impl MappingManager {
             self.con_mapper = Some(ConMapper::start(
                 state, virtual_gamepad_ref, ready, Some(det.result()),
                 params.0, params.1, params.2, params.3, params.4,
-                params.5, params.6, params.7, params.8, self.aim_enable.clone(), self.rt_rapid_fire.clone()
+                params.5, params.6, params.7, params.8, self.aim_enable.clone(), self.rapid_fire_mode.clone()
             ));
         }
         

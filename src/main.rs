@@ -9,9 +9,10 @@ use std::path::Path;
 mod utils;
 mod modules;
 use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_height, load_config_file, save_config_file, save_current_config, ConfigFile, ConMapping, check_dir_exist};
+use modules::screen_capture_thread::capture_frame_dimensions;
 use utils::enum_device_tool::enumerate_controllers;
 use modules::mapping_state_machine::MappingManager;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 const CHARACTER_WIDTH: f32 = 12.0; // 英文字体宽度为 CHARACTER_WIDTH * 0.6
 const SPACING: f32 = 8.0;
@@ -135,8 +136,10 @@ struct MyApp {
     
     // 输入设备选择
     use_controller: bool, // 是否使用手柄
-    rt_rapid_fire: Arc<AtomicBool>, // 右扳机连点开关（跨线程共享）
-    
+    rapid_fire_mode: Arc<AtomicU8>, // 连点模式（跨线程共享）：0=关闭, 1=始终连点, 2=半按扳机连点
+    rapid_fire_mode_selected: String,
+    rapid_fire_mode_items: Vec<String>,
+
     // 吸附方式选择
     aa_activate_mode_selected: String,
     aa_activate_mode_items: Vec<String>,
@@ -200,6 +203,9 @@ struct MyApp {
     inference_preview_window_created: bool, // 推理预览窗口是否已创建
     preview_allowed: bool, // 预览是否允许显示（需要智慧核心运行）
 
+    // 截图尺寸缓存（切换到辅助功能tab时刷新）
+    capture_dimensions_text: String,
+
     // 调试输出
     debug_enabled: bool,
     show_debug_window: bool, // 手柄键位调试窗口
@@ -247,7 +253,7 @@ impl Default for MyApp {
         
         // 初始化参数共享结构
         let aim_enable = Arc::new(AtomicBool::new(false));
-        let rt_rapid_fire = Arc::new(AtomicBool::new(false));
+        let rapid_fire_mode = Arc::new(AtomicU8::new(0));
         let outer_size = Arc::new(Mutex::new(String::new()));
         let mid_size = Arc::new(Mutex::new(String::new()));
         let inner_size = Arc::new(Mutex::new(String::new()));
@@ -271,7 +277,7 @@ impl Default for MyApp {
             hipfire.clone(),
             vertical_str.clone(),
             aim_height.clone(),
-            rt_rapid_fire.clone(),
+            rapid_fire_mode.clone(),
         );
         
         let mut app = Self {
@@ -283,7 +289,14 @@ impl Default for MyApp {
             delete_config_confirm: None,
             add_config_dialog: None,
             use_controller: false, // 默认不使用手柄
-            rt_rapid_fire,
+            rapid_fire_mode,
+            rapid_fire_mode_selected: "不启用连点".to_string(),
+            rapid_fire_mode_items: vec![
+                "不启用连点".to_string(),
+                "OCR 识别".to_string(),
+                "半按扳机连点".to_string(),
+                "始终连点".to_string(),
+            ],
             aa_activate_mode_selected: String::new(),
             aa_activate_mode_items: vec!["瞄准和开火".to_string(), "仅开火".to_string()],
             screen_height,
@@ -321,6 +334,7 @@ impl Default for MyApp {
             show_inference_preview: false,
             inference_preview_window_created: false,
             preview_allowed: false,
+            capture_dimensions_text: "未启动".to_string(),
             debug_enabled: false,
             show_debug_window: false,
             debug_axis_lx: String::new(),
@@ -419,6 +433,12 @@ impl MyApp {
     fn load_config(&mut self, config: &ConfigFile) {
         self.use_controller = config.use_controller;
         self.aa_activate_mode_selected = config.aa_activate_mode.clone();
+        self.rapid_fire_mode_selected = if config.rapid_fire_mode.is_empty() {
+            "不启用连点".to_string()
+        } else {
+            config.rapid_fire_mode.clone()
+        };
+        self.rapid_fire_mode.store(Self::rapid_fire_mode_to_u8(&self.rapid_fire_mode_selected), Ordering::Relaxed);
         self.outer_diameter = config.assist_curve.outer_diameter;
         self.outer_strength = config.assist_curve.outer_strength;
         self.middle_diameter = config.assist_curve.middle_diameter;
@@ -514,6 +534,7 @@ impl MyApp {
             use_controller: self.use_controller,
             vertical_strength_coefficient: self.vertical_strength_factor,
             con_mapping: Some(self.debug_to_con_mapping()),
+            rapid_fire_mode: self.rapid_fire_mode_selected.clone(),
         }
     }
     
@@ -620,7 +641,7 @@ impl MyApp {
             if !mapping.is_complete() {
                 self.show_debug_window = true;
                 self.debug_enabled = true;
-                modules::bg_con_reading::set_debug_print_enabled(true);
+                modules::gamepad_reading_thread::set_debug_print_enabled(true);
                 self.mapping_manager.start_con_reader_for_debug();
                 return;
             }
@@ -669,6 +690,15 @@ impl MyApp {
             use_controller: false,
             vertical_strength_coefficient: 0.4,
             con_mapping: Some(ConMapping::default()),
+            rapid_fire_mode: "不启用连点".to_string(),
+        }
+    }
+
+    fn rapid_fire_mode_to_u8(mode: &str) -> u8 {
+        match mode {
+            "始终连点" => 1,
+            "半按扳机连点" => 2,
+            _ => 0,
         }
     }
 }
@@ -843,8 +873,6 @@ impl eframe::App for MyApp {
 
             // 第二部分
             ui.horizontal(|ui| {
-                ui.set_enabled(!self.core_enabled);
-
                 ui.add_sized(
                     egui::Vec2::new(
                         CHARACTER_WIDTH * 3.0,
@@ -1333,7 +1361,7 @@ impl eframe::App for MyApp {
                             }
                             self.show_debug_window = true;
                             self.debug_enabled = true;
-                            modules::bg_con_reading::set_debug_print_enabled(true);
+                            modules::gamepad_reading_thread::set_debug_print_enabled(true);
                             self.mapping_manager.start_con_reader_for_debug();
                         }
                     });
@@ -1347,20 +1375,58 @@ impl eframe::App for MyApp {
                     ParamTab::Accessibility => {
 
                     ui.horizontal(|ui| {
-                        // 右扳机连点开关（仅在手柄模式下可用）
-                        let mut rapid_enabled = self.rt_rapid_fire.load(Ordering::Relaxed);
-                        let enabled_before = rapid_enabled;
+                        ui.add_sized(
+                            egui::Vec2::new(CHARACTER_WIDTH * 7.0, ROW_HEIGHT),
+                            egui::Label::new("连点触发方式")
+                        );
+
+                        let combo_width = ui.available_width() - SPACING;
+                        let old_mode = self.rapid_fire_mode_selected.clone();
                         ui.add_enabled_ui(self.use_controller, |ui| {
-                            ui.checkbox(&mut rapid_enabled, "连点");
+                            egui::ComboBox::from_id_source("rapid_fire_combo")
+                                .width(combo_width)
+                                .selected_text(&self.rapid_fire_mode_selected)
+                                .show_ui(ui, |ui| {
+                                    for item in &self.rapid_fire_mode_items {
+                                        ui.selectable_value(&mut self.rapid_fire_mode_selected, item.clone(), item);
+                                    }
+                                });
                         });
-                        if rapid_enabled != enabled_before {
-                            self.rt_rapid_fire.store(rapid_enabled, Ordering::Relaxed);
+
+                        if self.rapid_fire_mode_selected != old_mode {
+                            self.rapid_fire_mode.store(Self::rapid_fire_mode_to_u8(&self.rapid_fire_mode_selected), Ordering::Relaxed);
+                            self.mark_config_changed();
+                            self.save_config();
                         }
                     });
 
                     ui.separator();
 
                     ui.horizontal(|ui| {
+                        ui.add_sized(
+                            egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
+                            egui::Label::new("截图尺寸")
+                        );
+                        ui.add_sized(
+                            egui::Vec2::new(ui.available_width() - SPACING, ROW_HEIGHT),
+                            egui::Label::new(&self.capture_dimensions_text)
+                        );
+                    });
+
+                    ui.horizontal(|ui| {
+                        if ui.add_sized(
+                            egui::Vec2::new(CHARACTER_WIDTH * 3.0, ROW_HEIGHT),
+                            egui::Button::new("刷新")
+                        ).clicked() {
+                            self.capture_dimensions_text = match capture_frame_dimensions() {
+                                Ok((w, h)) if w > 0 && h > 0 => format!("{}×{}", w, h),
+                                _ => "获取失败".to_string(),
+                            };
+                        }
+                        ui.add_sized(
+                            egui::Vec2::new(ui.available_width() - CHARACTER_WIDTH * 1.6 - SPACING * 2.0, ROW_HEIGHT),
+                            egui::Label::new("")
+                        );
                         if ui.add_sized(
                             egui::Vec2::new(CHARACTER_WIDTH * 1.6, ROW_HEIGHT),
                             egui::Button::new("?")
@@ -1532,6 +1598,8 @@ impl eframe::App for MyApp {
                             // 重置所有配置数据到默认值
                             self.use_controller = false;
                             self.aa_activate_mode_selected = String::new();
+                            self.rapid_fire_mode_selected = "不启用连点".to_string();
+                            self.rapid_fire_mode.store(0, Ordering::Relaxed);
                             self.outer_diameter = 0.0;
                             self.outer_strength = 0.0;
                             self.middle_diameter = 0.0;
@@ -2153,7 +2221,7 @@ impl eframe::App for MyApp {
                                 egui::Sense::hover(),
                             );
 
-                            let text = modules::bg_con_reading::get_debug_text();
+                            let text = modules::gamepad_reading_thread::get_debug_text();
                             ui.painter().text(
                                 rect.min,
                                 egui::Align2::LEFT_TOP,
@@ -2168,7 +2236,7 @@ impl eframe::App for MyApp {
                                 if ui.add_sized(egui::Vec2::new(CHARACTER_WIDTH * 3.0, ROW_HEIGHT), egui::Button::new("关闭")).clicked() {
                                     self.show_debug_window = false;
                                     self.debug_enabled = false;
-                                    modules::bg_con_reading::set_debug_print_enabled(false);
+                                    modules::gamepad_reading_thread::set_debug_print_enabled(false);
                                     self.mapping_manager.stop_con_reader_for_debug();
                                     self.mark_config_changed();
                                     self.save_config();
