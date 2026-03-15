@@ -10,6 +10,7 @@ mod utils;
 mod modules;
 use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_height, load_config_file, save_config_file, save_current_config, ConfigFile, ConMapping, check_dir_exist};
 use modules::screen_capture_thread::capture_frame_dimensions;
+use modules::update_check::{check_github_update, UpdateCheckResult, UpdateInfo};
 use utils::enum_device_tool::enumerate_controllers;
 use modules::mapping_state_machine::MappingManager;
 use modules::weapon_rec_thread::{TARGET_W as CANNY_W, TARGET_H as CANNY_H};
@@ -24,6 +25,9 @@ const GREEN: egui::Color32 = egui::Color32::from_rgb(41, 157, 143);
 const YELLOW: egui::Color32 = egui::Color32::from_rgb(233, 196, 106);
 const RED: egui::Color32 = egui::Color32::from_rgb(216, 118, 89);
 
+/// 正确的许可证代码，用于校验及决定是否在输入框中回显
+const LICENSE_CODE: &str = "forthegloriouspurpose";
+
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -36,7 +40,7 @@ fn main() -> Result<(), eframe::Error> {
         ..Default::default()
     };
     eframe::run_native(
-        "apex-egui",
+        &format!("apex-egui v{}", env!("CARGO_PKG_VERSION")),
         options,
         Box::new(|cc| {
             // 加载字体
@@ -165,6 +169,8 @@ struct MyApp {
 
     // 许可证
     license_key: String,
+    /// 用户曾在许可证错误时点击过智慧核心，此时在按钮左侧显示红色“许可证错误”
+    license_error_clicked: bool,
     
     // 参数设定 tab
     param_tab: ParamTab,
@@ -206,6 +212,14 @@ struct MyApp {
 
     // 截图尺寸缓存（切换到辅助功能tab时刷新）
     capture_dimensions_text: String,
+
+    // 启动时检查 GitHub 更新（有更新时在辅助功能右侧显示“有更新可用”）
+    update_available: Arc<Mutex<Option<UpdateInfo>>>,
+    update_check_started: bool,
+    /// 手动检查更新失败原因（辅助功能 tab 内显示“检查失败原因”）
+    update_check_failure: Arc<Mutex<Option<String>>>,
+    /// 是否正在执行检查更新（防止重复点击）
+    update_check_in_progress: Arc<AtomicBool>,
 
     // 调试输出
     debug_enabled: bool,
@@ -313,6 +327,7 @@ impl Default for MyApp {
             vertical_strength_factor: 0.0,
             aim_height_factor: 0.0,
             license_key: String::new(),
+            license_error_clicked: false,
             param_tab: ParamTab::SnapFeature,
             show_preview: false,
             preview_window_created: false,
@@ -336,7 +351,11 @@ impl Default for MyApp {
             show_inference_preview: false,
             inference_preview_window_created: false,
             preview_allowed: false,
-            capture_dimensions_text: "未启动".to_string(),
+            capture_dimensions_text: "游戏窗口未激活".to_string(),
+            update_available: Arc::new(Mutex::new(None)),
+            update_check_started: false,
+            update_check_failure: Arc::new(Mutex::new(None)),
+            update_check_in_progress: Arc::new(AtomicBool::new(false)),
             debug_enabled: false,
             show_debug_window: false,
             debug_axis_lx: String::new(),
@@ -450,6 +469,12 @@ impl MyApp {
         self.hipfire_strength_factor = config.assist_curve.hipfire;
         self.vertical_strength_factor = config.vertical_strength_coefficient;
         self.aim_height_factor = config.aim_height_coefficient;
+        // 许可证：仅当配置中的许可证正确时才显示在输入框，否则留空
+        self.license_key = if config.license_code.trim() == LICENSE_CODE {
+            config.license_code.clone()
+        } else {
+            String::new()
+        };
         if let Some(ref m) = config.con_mapping {
             self.debug_axis_lx = m.axis.lx.map(|n| n.to_string()).unwrap_or_default();
             self.debug_axis_ly = m.axis.ly.map(|n| n.to_string()).unwrap_or_default();
@@ -537,6 +562,7 @@ impl MyApp {
             vertical_strength_coefficient: self.vertical_strength_factor,
             con_mapping: Some(self.debug_to_con_mapping()),
             rapid_fire_mode: self.rapid_fire_mode_selected.clone(),
+            license_code: self.license_key.clone(),
         }
     }
     
@@ -700,6 +726,7 @@ impl MyApp {
             vertical_strength_coefficient: 0.4,
             con_mapping: Some(ConMapping::default()),
             rapid_fire_mode: "不启用连点".to_string(),
+            license_code: String::new(),
         }
     }
 
@@ -716,6 +743,29 @@ impl MyApp {
 
 impl eframe::App for MyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 启动时在后台检查一次 GitHub 是否有新版本（不阻塞 UI）
+        if !self.update_check_started {
+            self.update_check_started = true;
+            let result = self.update_available.clone();
+            let current = env!("CARGO_PKG_VERSION").to_string();
+            std::thread::spawn(move || {
+                match check_github_update() {
+                    UpdateCheckResult::UpdateAvailable(info) => {
+                        println!("当前版本: {}, 最新版本: {}", current, info.version);
+                        if let Ok(mut guard) = result.lock() {
+                            *guard = Some(info);
+                        }
+                    }
+                    UpdateCheckResult::UpToDate { latest_version } => {
+                        println!("当前版本: {}, 已是最新 (远程: {})", current, latest_version);
+                    }
+                    UpdateCheckResult::CheckFailed(reason) => {
+                        println!("当前版本: {}, 检查失败: {}", current, reason);
+                    }
+                }
+            });
+        }
+
         // 确保直径值满足约束关系：内 <= 中 <= 外 <= 屏幕高度
         if self.outer_diameter > self.screen_height {
             self.outer_diameter = self.screen_height;
@@ -930,6 +980,21 @@ impl eframe::App for MyApp {
                 ).clicked() {
                     self.param_tab = ParamTab::Accessibility;
                 }
+
+                // 有更新时在“辅助功能”右侧显示“有更新可用”链接；当前在辅助功能 tab 时不显示
+                if self.param_tab != ParamTab::Accessibility {
+                    if let Ok(guard) = self.update_available.lock() {
+                        if let Some(ref info) = *guard {
+                            let link = egui::Link::new(egui::RichText::new("有更新可用").color(YELLOW));
+                            if ui.add_sized(
+                                egui::Vec2::new(CHARACTER_WIDTH * 6.0, ROW_HEIGHT),
+                                link
+                            ).clicked() {
+                                let _ = open::that(&info.url);
+                            }
+                        }
+                    }
+                }
             });
 
             ui.horizontal(|ui| {
@@ -1019,12 +1084,12 @@ impl eframe::App for MyApp {
                                         );
 
                                         ui.add_sized(
-                                            egui::Vec2::new(CHARACTER_WIDTH * 4.0, ROW_HEIGHT),
+                                            egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
                                                 egui::Label::new("吸附范围")
                                         );
 
                                         ui.add_sized(
-                                            egui::Vec2::new(CHARACTER_WIDTH * 4.0, ROW_HEIGHT),
+                                            egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
                                                 egui::Label::new("吸附强度")
                                         );
                                     });
@@ -1366,7 +1431,10 @@ impl eframe::App for MyApp {
                     ui.separator();
 
                     ui.horizontal(|ui| {
-                        if ui.button("手柄键位调试").clicked() {
+                        if ui.add_sized(
+                            egui::Vec2::new(CHARACTER_WIDTH * 7.0, ROW_HEIGHT),
+                            egui::Button::new("手柄键位调试")
+                        ).clicked() {
                             if !enumerate_controllers() {
                                 self.help_window_vigem_ready = Some(check_dir_exist("C:/Program Files/Nefarius Software Solutions/ViGEm Bus Driver"));
                                 self.help_window_controller_ready = Some(false);
@@ -1432,13 +1500,75 @@ impl eframe::App for MyApp {
                             egui::Vec2::new(CHARACTER_WIDTH * 3.0, ROW_HEIGHT),
                             egui::Button::new("刷新")
                         ).clicked() {
-                            self.capture_dimensions_text = match capture_frame_dimensions() {
-                                Ok((w, h)) if w > 0 && h > 0 => format!("{}×{}", w, h),
-                                _ => "获取失败".to_string(),
-                            };
+                            if let Ok((w, h)) = capture_frame_dimensions() {
+                                if w > 0 && h > 0 {
+                                    self.capture_dimensions_text = format!("{}×{}", w, h);
+                                }
+                            }
+                        }
+                    });
+
+                    ui.separator();
+
+                    // 检查更新 + “?” 帮助按钮（同一行）
+                    ui.horizontal(|ui| {
+                        let in_progress = self.update_check_in_progress.load(Ordering::Relaxed);
+                        let check_btn = egui::Button::new(if in_progress { "检查中" } else { "检查更新" })
+                            .min_size(egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT));
+                        if ui.add_enabled(!in_progress, check_btn).clicked() {
+                            self.update_check_in_progress.store(true, Ordering::Relaxed);
+                            if let Ok(mut g) = self.update_available.lock() {
+                                *g = None;
+                            }
+                            if let Ok(mut g) = self.update_check_failure.lock() {
+                                *g = None;
+                            }
+                            let result_arc = self.update_available.clone();
+                            let failure_arc = self.update_check_failure.clone();
+                            let progress_arc = self.update_check_in_progress.clone();
+                            std::thread::spawn(move || {
+                                let res = check_github_update();
+                                progress_arc.store(false, Ordering::Relaxed);
+                                match res {
+                                    UpdateCheckResult::UpdateAvailable(info) => {
+                                        if let Ok(mut guard) = result_arc.lock() {
+                                            *guard = Some(info);
+                                        }
+                                    }
+                                    UpdateCheckResult::UpToDate { .. } => {}
+                                    UpdateCheckResult::CheckFailed(reason) => {
+                                        if let Ok(mut guard) = failure_arc.lock() {
+                                            *guard = Some(reason);
+                                        }
+                                    }
+                                }
+                            });
+                        }
+                        let update_url = self.update_available.lock().ok().and_then(|g| g.as_ref().map(|i| i.url.clone()));
+                        if let Some(url) = update_url {
+                            let link = egui::Link::new(egui::RichText::new("有更新可用").color(YELLOW));
+                            if ui.add_sized(
+                                egui::Vec2::new(CHARACTER_WIDTH * 6.0, ROW_HEIGHT),
+                                link
+                            ).clicked() {
+                                let _ = open::that(&url);
+                            }
+                        } else if let Ok(guard) = self.update_check_failure.lock() {
+                            if let Some(ref reason) = *guard {
+                                let label = egui::Label::new(egui::RichText::new("检查失败").color(RED));
+                                let r = ui.add_sized(
+                                    egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
+                                    label
+                                );
+                                let reason = reason.clone();
+                                r.on_hover_ui(move |ui| {
+                                    ui.set_max_width(CHARACTER_WIDTH * 32.0);
+                                    ui.add(egui::Label::new(&reason).wrap(true));
+                                });
+                            }
                         }
                         ui.add_sized(
-                            egui::Vec2::new(ui.available_width() - CHARACTER_WIDTH * 1.6 - SPACING * 2.0, ROW_HEIGHT),
+                            egui::Vec2::new(ui.available_width() - CHARACTER_WIDTH * 1.6 - SPACING, ROW_HEIGHT),
                             egui::Label::new("")
                         );
                         if ui.add_sized(
@@ -1448,7 +1578,6 @@ impl eframe::App for MyApp {
                             self.help_window_vigem_ready = Some(check_dir_exist("C:/Program Files/Nefarius Software Solutions/ViGEm Bus Driver"));
                             self.help_window_controller_ready = Some(enumerate_controllers());
                             self.show_help_window = true;
-                            // 游戏窗口状态在帮助窗口内渲染时按 is_apex_window_ready() 实时显示
                         }
                     });
 
@@ -1467,24 +1596,42 @@ impl eframe::App for MyApp {
 
             ui.separator();
 
-            ui.horizontal(|ui| {                
+            ui.horizontal(|ui| {
+                let license_ok = self.license_key.trim() == LICENSE_CODE;
+                if !license_ok && self.license_error_clicked {
+                    ui.add_sized(
+                        egui::Vec2::new(CHARACTER_WIDTH * 6.0, ROW_HEIGHT),
+                        egui::Label::new(egui::RichText::new("许可证错误").color(RED))
+                    );
+                } else {
+                    ui.add_sized(
+                        egui::Vec2::new(CHARACTER_WIDTH * 6.0, ROW_HEIGHT),
+                        egui::Label::new("")
+                    );
+                }
+                if license_ok {
+                    self.license_error_clicked = false;
+                }
+
                 ui.add_sized(
-                    egui::Vec2::new((ui.available_width() - CHARACTER_WIDTH * 5.0) / 2.0 - SPACING, ROW_HEIGHT),
+                    egui::Vec2::new((ui.available_width() - CHARACTER_WIDTH * 11.0) / 2.0 - SPACING * 2.0, ROW_HEIGHT),
                     egui::Label::new("")
                 );
 
                 let button_color = if self.core_enabled { Some(GREEN) } else { None };
-                
-                let mut button = egui::Button::new("智慧核心");
+                let mut button = egui::Button::new("智慧核心")
+                    .min_size(egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT));
                 if let Some(color) = button_color {
                     button = button.fill(color);
                 }
-                
-                if ui.add_sized(
-                    egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
-                    button
-                ).clicked() {
-                    self.toggle_core();
+                if ui.add(button).clicked() {
+                    if license_ok {
+                        self.toggle_core();
+                    } else {
+                        self.license_error_clicked = true;
+                    }
+                    self.mark_config_changed();
+                    self.save_config();
                 }
 
                 ui.add_sized(
@@ -2181,7 +2328,7 @@ impl eframe::App for MyApp {
                                         " 等待数据...".to_string()
                                     };
 
-                                    ui.label(label_text);
+                                    ui.label(label_text); // 这里不用加 size
                                 });
                             });
 

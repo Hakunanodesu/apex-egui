@@ -94,6 +94,9 @@ pub struct ConfigFile {
     pub con_mapping: Option<ConMapping>,
     #[serde(default)]
     pub rapid_fire_mode: String,
+    /// 许可证代码，首次为空字符串，用户填写后保存
+    #[serde(default)]
+    pub license_code: String,
 }
 
 /// 读取 configs/.current 文件，返回当前配置和模型

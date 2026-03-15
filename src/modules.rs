@@ -4,3 +4,4 @@ pub mod gamepad_reading_thread;
 pub mod enemy_det_thread;
 pub mod screen_capture_thread;
 pub mod weapon_rec_thread;
+pub mod update_check;

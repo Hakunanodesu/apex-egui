@@ -25,6 +25,7 @@ ort = { version = "2.0.0-rc.10", features = ["directml"] }
 ndarray = "0.16.1"
 anyhow = "1.0.98"
 num_cpus = "1.17.0"
+ureq = "2"
 fast_image_resize = "5"
 image = "0.25"
 imageproc = "0.25"

@@ -16,8 +16,9 @@
 | `GREEN` | `egui::Color32` | `rgb(41, 157, 143)` | 绿色（状态指示） |
 | `YELLOW` | `egui::Color32` | `rgb(233, 196, 106)` | 黄色（状态指示） |
 | `RED` | `egui::Color32` | `rgb(216, 118, 89)` | 红色（状态指示） |
+| `LICENSE_CODE` | `&str` | `"forthegloriouspurpose"` | 正确的许可证代码，用于校验及是否在输入框中回显 |
 
-**默认配置（`create_default_config`，约 678–703 行）：**
+**默认配置（`create_default_config`，约 704–730 行）：**
 
 - `base_inner_diameter`: `60.0`（1440p 基准）
 - `base_middle_diameter`: `60.0`
@@ -32,8 +33,9 @@
 - `use_controller`: `false`
 - `vertical_strength_coefficient`: `0.4`
 - `rapid_fire_mode`: `"不启用连点"`
+- `license_code`: `""`（空字符串）
 
-**字体嵌入路径（约 84、91 行）：**
+**字体嵌入路径（约 88、95 行，相对 `src/main.rs` 为 `../fonts/`，即项目根下 `fonts/`）：**
 
 - `fonts/JetBrainsMono-Regular.ttf`
 - `fonts/NotoSansCJKsc-Regular.otf`
@@ -93,11 +95,21 @@
 | 常量名 | 类型 | 值 | 说明 |
 |--------|------|-----|------|
 | `DEBUG_PRINT_ENABLED` | `AtomicBool` | `false` | 是否打印调试信息 |
+| `DEBUG_TEXT` | `Mutex<String>` | 空字符串 | 调试文本缓存，供 UI 读取显示 |
 | `MAX_CONSECUTIVE_ERRORS`（局部） | 约 274 行 | `100` | 最大连续错误次数（手柄断开较常见，故允许更多） |
 
 ---
 
-### 7. `build.rs`（编译时生成）
+### 7. `src/modules/update_check.rs`
+
+| 常量名 | 类型 | 值 | 说明 |
+|--------|------|-----|------|
+| `RELEASES_URL` | `&str` | `"https://api.github.com/repos/Hakunanodesu/apex-egui/releases"` | GitHub Release API 地址 |
+| `REQUEST_TIMEOUT_MS` | `u64` | `5000` | 请求超时（毫秒） |
+
+---
+
+### 8. `build.rs`（编译时生成）
 
 - **输出模块**：`$OUT_DIR/gun_templates.rs`
 - **常量**：`TEMPLATE_FILES: &[(&str, &[u8])]` — 由 `gun_template/*.png` 扫描生成，嵌入 (名称无后缀, PNG 字节)。
@@ -105,17 +117,18 @@
 
 ---
 
-### 8. `src/utils.rs`
+### 9. `src/utils.rs`
 
 **默认值：**
 
-- `ConMappingAxis::default()`：所有轴为 `None`（约 32–35 行）。
-- `ConMappingButton::default()`：所有按键为 `None`（约 53–58 行）。
+- `ConMappingAxis::default()`：所有轴为 `None`（约 34–36 行）。
+- `ConMappingButton::default()`：所有按键为 `None`（约 55–59 行）。
+- `ConfigFile` 含 `license_code`，反序列化时 `#[serde(default)]` 为空字符串（约 97–99 行）。
 
 **路径常量（硬编码字符串）：**
 
-- 当前配置索引文件：`configs/.current`（约 101、116 行）。
-- 配置 JSON 路径格式：`configs/{config_name}.json`（约 122、129 行）。
+- 当前配置索引文件：`configs/.current`（约 104、118 行）。
+- 配置 JSON 路径格式：`configs/{config_name}.json`（约 125、132 行）。
 
 ---
 
@@ -138,6 +151,7 @@
 - `vertical_strength_coefficient`: 垂直强度系数
 - `con_mapping`: 手柄轴/按键映射（axis: lx, ly, rx, ry, lt, rt；button: lb, rb, ls, rs, back, start, x, y, a, b）
 - `rapid_fire_mode`: 连点模式（如 `"根据枪械自动切换"`）
+- `license_code`: 许可证代码（可选，默认空；与 `LICENSE_CODE` 校验通过后决定是否回显）
 
 ### 2. 模型配置（检测用）
 
@@ -159,15 +173,16 @@
 
 | 文件 | 常量/配置要点 |
 |------|----------------|
-| `src/main.rs` | 字号、间距、行高、颜色；默认吸附/连点/手柄配置；字体路径 |
+| `src/main.rs` | 字号、间距、行高、颜色、许可证常量；默认吸附/连点/手柄/许可证配置；字体路径 |
 | `src/modules/screen_capture_thread.rs` | Apex 窗口标题、基准高度、武器 ROI 坐标与间隔 |
 | `src/modules/weapon_rec_thread.rs` | 目标宽高、Canny 阈值、边缘阈值 |
 | `src/modules/gamepad_mapping_thread.rs` | 连点白名单武器列表、连续错误上限 |
 | `src/modules/enemy_det_thread.rs` | 检测默认 size/conf/iou/classes、连续错误上限 |
-| `src/modules/gamepad_reading_thread.rs` | 调试开关、连续错误上限 |
-| `src/utils.rs` | 手柄映射默认值、configs 路径与 .current 路径 |
+| `src/modules/gamepad_reading_thread.rs` | 调试开关与调试文本、连续错误上限 |
+| `src/modules/update_check.rs` | GitHub Release URL、请求超时 |
+| `src/utils.rs` | 手柄映射默认值、ConfigFile（含 license_code）、configs 路径与 .current 路径 |
 | `build.rs` | gun_template 目录、生成的 TEMPLATE_FILES 路径 |
-| `configs/*.json` | 运行时主配置（吸附曲线、手柄映射、连点模式等） |
+| `configs/*.json` | 运行时主配置（吸附曲线、手柄映射、连点模式、license_code 等） |
 | `configs/.current` | 当前使用的配置名与模型名 |
 | `models/*.json` | 检测模型推理参数（size, conf_thres, iou_thres, classes） |
 
