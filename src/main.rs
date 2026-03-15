@@ -28,15 +28,33 @@ const RED: egui::Color32 = egui::Color32::from_rgb(216, 118, 89);
 /// 正确的许可证代码，用于校验及决定是否在输入框中回显
 const LICENSE_CODE: &str = "forthegloriouspurpose";
 
+/// 从编译期嵌入的 PNG 生成窗口/标题栏图标（IconData）
+fn load_window_icon() -> Option<egui::viewport::IconData> {
+    let png_bytes = include_bytes!("../3mz_ds_ver.png");
+    let img = image::load_from_memory(png_bytes).ok()?;
+    let img = img.resize(256, 256, image::imageops::FilterType::Lanczos3);
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some(egui::viewport::IconData {
+        rgba: rgba.as_raw().to_vec(),
+        width: w,
+        height: h,
+    })
+}
+
 fn main() -> Result<(), eframe::Error> {
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_inner_size([
+            CHARACTER_WIDTH * 32.0,
+            ROW_HEIGHT * 13.0 + ROW_HEIGHT / 3.0 * 7.0 + SPACING * 21.0
+        ])
+        .with_resizable(false)
+        .with_maximize_button(false); // 禁用最大化按钮
+    if let Some(icon) = load_window_icon() {
+        viewport = viewport.with_icon(std::sync::Arc::new(icon));
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_inner_size([
-                CHARACTER_WIDTH * 32.0, 
-                ROW_HEIGHT * 13.0 + ROW_HEIGHT / 3.0 * 7.0 + SPACING * 21.0
-            ])
-            .with_resizable(false)
-            .with_maximize_button(false), // 禁用最大化按钮
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

@@ -29,3 +29,7 @@ ureq = "2"
 fast_image_resize = "5"
 image = "0.25"
 imageproc = "0.25"
+
+[build-dependencies]
+winresource = "0.1"
+image = "0.25"
