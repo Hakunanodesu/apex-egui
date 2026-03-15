@@ -12,14 +12,17 @@ use windows_capture::{
     capture::{Context, GraphicsCaptureApiHandler},
     frame::Frame,
     graphics_capture_api::InternalCaptureControl,
-    monitor::Monitor,
     settings::{
         ColorFormat, CursorCaptureSettings, DirtyRegionSettings, DrawBorderSettings,
         MinimumUpdateIntervalSettings, SecondaryWindowSettings, Settings,
     },
+    window::Window,
 };
 
 use crate::utils::console_redirect::log_error;
+
+/// 用于查找 Apex 英雄窗口的标题（标题必须完全等于此字符串）
+const APEX_WINDOW_TITLE: &str = "Apex Legends";
 
 const BASE_HEIGHT: f32 = 1080.0;
 const WEAPON_ROI_OFFSET_X: f32 = 377.0;
@@ -250,7 +253,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
     }
 
     fn on_closed(&mut self) -> Result<(), Self::Error> {
-        // println!("Capture session closed after {}s", self.start.elapsed().as_secs());
+        self.error_flag.store(true, Ordering::SeqCst);
         Ok(())
     }
 }
@@ -286,12 +289,24 @@ impl GraphicsCaptureApiHandler for OneShotHandler {
     }
 }
 
-/// 单帧捕获获取屏幕物理分辨率，与持续捕获使用相同的 windows_capture 路径
+/// 检查 Apex 游戏窗口是否存在且可捕获（供 UI 显示「游戏窗口 就绪/未就绪」及启动前校验）
+pub fn is_apex_window_ready() -> bool {
+    match Window::from_name(APEX_WINDOW_TITLE) {
+        Ok(w) => w.is_valid(),
+        Err(_) => false,
+    }
+}
+
+/// 单帧捕获获取目标窗口分辨率，与持续捕获使用相同的 windows_capture 路径（仅 Apex 窗口）
 pub fn capture_frame_dimensions() -> Result<(usize, usize), Box<dyn Error>> {
+    let window = Window::from_name(APEX_WINDOW_TITLE)
+        .map_err(|_| "未找到 Apex 窗口，请先启动游戏")?;
+    if !window.is_valid() {
+        return Err("Apex 窗口不可捕获".into());
+    }
     let dimensions = Arc::new(Mutex::new((0usize, 0usize)));
-    let monitor = Monitor::primary().expect("没有主显示器");
     let settings = Settings::new(
-        monitor,
+        window,
         CursorCaptureSettings::WithoutCursor,
         DrawBorderSettings::WithoutBorder,
         SecondaryWindowSettings::Default,
@@ -346,10 +361,14 @@ impl ScreenCapturer {
         let version2 = Arc::new(AtomicU64::new(0));
         let crop_size = Arc::new(Mutex::new((0usize, 0usize)));
 
-        // 2. 构造 capture 设置
-        let monitor = Monitor::primary().expect("没有主显示器");
+        // 2. 查找 Apex 窗口并构造 capture 设置
+        let window = Window::from_name(APEX_WINDOW_TITLE)
+            .map_err(|_| "未找到 Apex 窗口，请先启动游戏")?;
+        if !window.is_valid() {
+            return Err("Apex 窗口不可捕获".into());
+        }
         let settings = Settings::new(
-            monitor,
+            window,
             CursorCaptureSettings::WithoutCursor,
             DrawBorderSettings::WithoutBorder,
             SecondaryWindowSettings::Default,

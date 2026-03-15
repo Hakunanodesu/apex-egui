@@ -145,11 +145,13 @@ impl MappingManager {
     }
     
     // 更新状态机
-    pub fn update(&mut self, con_exist: &mut bool, virtual_gamepad: Arc<Mutex<Option<Xbox360Wired<Arc<Client>>>>>) -> (bool, bool, bool, bool) {
+    /// 返回 (do_resize, show_config, show_preview, disable_on_top, show_help_for_window_error)
+    pub fn update(&mut self, con_exist: &mut bool, virtual_gamepad: Arc<Mutex<Option<Xbox360Wired<Arc<Client>>>>>) -> (bool, bool, bool, bool, bool) {
         let mut do_resize = false;
         let mut show_config = false;
         let mut show_preview = false;
         let mut disable_on_top = false;
+        let mut show_help_for_window_error = false;
         
         match &self.state.clone() {
             MappingState::Idle => {
@@ -273,7 +275,9 @@ impl MappingManager {
             
             MappingState::Error { message, from_state, _should_retry } => {
                 log_error(&format!("映射错误: {}", message));
-                
+                if matches!(from_state.as_ref(), MappingState::StartingCapture) {
+                    show_help_for_window_error = true;
+                }
                 // 根据错误来源决定清理策略
                 match from_state.as_ref() {
                     MappingState::CheckingDevice => {
@@ -315,7 +319,7 @@ impl MappingManager {
             }
         }
         
-        (do_resize, show_config, show_preview, disable_on_top)
+        (do_resize, show_config, show_preview, disable_on_top, show_help_for_window_error)
     }
     
     // 尝试启动屏幕捕获

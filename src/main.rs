@@ -12,6 +12,7 @@ use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_he
 use modules::screen_capture_thread::capture_frame_dimensions;
 use utils::enum_device_tool::enumerate_controllers;
 use modules::mapping_state_machine::MappingManager;
+use modules::weapon_rec_thread::{TARGET_W as CANNY_W, TARGET_H as CANNY_H};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
 const CHARACTER_WIDTH: f32 = 12.0; // 英文字体宽度为 CHARACTER_WIDTH * 0.6
@@ -625,6 +626,13 @@ impl MyApp {
                 self.show_help_window = true;
                 return;
             }
+            // 游戏窗口未就绪时不允许启动，弹出「？」窗口
+            if !modules::screen_capture_thread::is_apex_window_ready() {
+                self.help_window_vigem_ready = Some(vigem_ready);
+                self.help_window_controller_ready = Some(controller_ready);
+                self.show_help_window = true;
+                return;
+            }
             
             // 同步参数到 MappingManager
             self.sync_params_to_manager();
@@ -722,9 +730,12 @@ impl eframe::App for MyApp {
         // 定期更新 MappingManager 状态（每帧更新）
         let vg_clone = self.virtual_gamepad.clone();
         let mut con_exist_local = self.con_exist;
-        let (_resize, _show_config, show_preview_flag, _disable_on_top) =
+        let (_resize, _show_config, show_preview_flag, _disable_on_top, show_help_for_window_error) =
             self.mapping_manager.update(&mut con_exist_local, vg_clone);
         self.con_exist = con_exist_local;
+        if show_help_for_window_error {
+            self.show_help_window = true;
+        }
         
         // 更新预览允许状态
         // 如果用户请求显示预览，且状态机允许显示，且智慧核心正在运行，则允许显示
@@ -1437,6 +1448,7 @@ impl eframe::App for MyApp {
                             self.help_window_vigem_ready = Some(check_dir_exist("C:/Program Files/Nefarius Software Solutions/ViGEm Bus Driver"));
                             self.help_window_controller_ready = Some(enumerate_controllers());
                             self.show_help_window = true;
+                            // 游戏窗口状态在帮助窗口内渲染时按 is_apex_window_ready() 实时显示
                         }
                     });
 
@@ -1947,14 +1959,30 @@ impl eframe::App for MyApp {
             let weapon_result_ref = self.mapping_manager.get_weapon_rec()
                 .as_ref()
                 .map(|w| w.result());
+            let weapon_canny_ref = self.mapping_manager.get_weapon_rec()
+                .as_ref()
+                .map(|w| w.canny_pixels());
+            let crop_size_ref = self.mapping_manager.get_screen_capturer()
+                .as_ref()
+                .map(|c| c.crop_size());
             let square_size_clone = square_size;
             
             // 获取屏幕缩放比例，将逻辑像素转换为物理像素
             let pixels_per_point = ctx.pixels_per_point();
-            // 窗口大小使用物理像素，需要转换为逻辑像素；为下方 label 留出空间（6 行：FPS + 四项耗时 + 当前武器）
+            // 武器识别图按原始捕获尺寸显示；crop_size 为 (宽, 高)，无时用模板尺寸
+            let (crop_w, crop_h) = crop_size_ref
+                .as_ref()
+                .and_then(|r| r.lock().ok())
+                .map(|g| *g)
+                .unwrap_or((CANNY_W as usize, CANNY_H as usize));
             let label_height = ROW_HEIGHT * 6.0;
-            let window_width_logical = ((square_size as f32) / pixels_per_point).max(CHARACTER_WIDTH * 0.6 * 23.0);
-            let window_height_logical = window_width_logical + label_height;
+            let main_h_logical = (square_size as f32) / pixels_per_point;
+            let weapon_w_logical = (crop_w as f32) / pixels_per_point;
+            let weapon_h_logical = (crop_h as f32) / pixels_per_point;
+            let window_width_logical = main_h_logical
+                .max(weapon_w_logical)
+                .max(CHARACTER_WIDTH * 0.6 * 23.0);
+            let window_height_logical = main_h_logical + weapon_h_logical + label_height;
             
             let viewport_id = egui::ViewportId::from_hash_of("inference_preview_window");
             
@@ -1981,15 +2009,21 @@ impl eframe::App for MyApp {
                                 egui::Color32::from_rgb(20, 20, 20),
                             );
                             
-                            // 计算图像显示区域（上方）和label区域（下方）
+                            // 布局：识别图（上）→ 武器识别图（中，按原始捕获尺寸缩放显示）→ label（下）
+                            let ppp = ctx.pixels_per_point();
+                            let main_h = (square_size_clone as f32) / ppp;
+                            let (crop_w, crop_h) = crop_size_ref
+                                .as_ref()
+                                .and_then(|r| r.lock().ok())
+                                .map(|g| *g)
+                                .unwrap_or((CANNY_W as usize, CANNY_H as usize));
+                            let weapon_w = (crop_w as f32) / ppp;
+                            let weapon_h = (crop_h as f32) / ppp;
                             let image_rect = egui::Rect::from_min_size(
                                 rect.min,
-                                egui::Vec2::new(rect.width(), rect.height() - label_height),
+                                egui::Vec2::new(rect.width(), main_h),
                             );
-                            let label_rect = egui::Rect::from_min_size(
-                                egui::pos2(rect.min.x, rect.max.y - label_height),
-                                egui::Vec2::new(rect.width(), label_height),
-                            );
+                            let mut main_img_left = image_rect.min.x; // 识别图实际左边缘，画完主图后更新
                             
                             // 显示图像和检测框
                             // 直接从屏幕捕获缓冲区读取并转换为图像
@@ -2018,6 +2052,7 @@ impl eframe::App for MyApp {
                                         let scaled_size = img_size * scale;
                                         let offset = (image_rect.size() - scaled_size) / 2.0;
                                         let img_rect = egui::Rect::from_min_size(image_rect.min + offset, scaled_size);
+                                        main_img_left = img_rect.min.x;
                                         
                                         // 将图像转换为 egui 纹理
                                         let color_image = egui::ColorImage {
@@ -2066,6 +2101,36 @@ impl eframe::App for MyApp {
                                                     }
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            let weapon_rect = egui::Rect::from_min_size(
+                                egui::pos2(main_img_left, image_rect.max.y),
+                                egui::Vec2::new(weapon_w, weapon_h),
+                            );
+                            let label_rect = egui::Rect::from_min_size(
+                                egui::pos2(rect.min.x, weapon_rect.max.y),
+                                egui::Vec2::new(rect.width(), label_height),
+                            );
+                            
+                            // 武器识别图：live 右下角 ROI 的 Canny 图，不缩放，左上角与识别图左上角对齐
+                            if let Some(ref canny_arc) = weapon_canny_ref {
+                                if let Ok(guard) = canny_arc.lock() {
+                                    if let Some(ref pixels) = *guard {
+                                        let canny_len = (CANNY_W as usize) * (CANNY_H as usize);
+                                        if pixels.len() == canny_len {
+                                            let mut canny_rgb: Vec<egui::Color32> = Vec::with_capacity(canny_len);
+                                            for &g in pixels.iter() {
+                                                canny_rgb.push(egui::Color32::from_rgb(g, g, g));
+                                            }
+                                            let canny_image = egui::ColorImage {
+                                                size: [CANNY_W as usize, CANNY_H as usize],
+                                                pixels: canny_rgb,
+                                            };
+                                            let canny_texture = ctx.load_texture("inference_preview_canny", canny_image, Default::default());
+                                            ui.put(weapon_rect, egui::Image::new(&canny_texture).fit_to_exact_size(weapon_rect.size()));
                                         }
                                     }
                                 }
@@ -2276,7 +2341,7 @@ impl eframe::App for MyApp {
             
             // 计算对话框大小和位置（居中显示）
             let dialog_width = CHARACTER_WIDTH * 12.8 + SPACING * 3.5;
-            let dialog_height = ROW_HEIGHT * 3.0 + SPACING * 4.0;
+            let dialog_height = ROW_HEIGHT * 4.0 + SPACING * 5.0;
             let dialog_pos = egui::pos2(
                 ctx.screen_rect().center().x - dialog_width / 2.0,
                 ctx.screen_rect().center().y - dialog_height / 2.0,
@@ -2334,6 +2399,28 @@ impl eframe::App for MyApp {
                                 );
                                 
                                 // 留空
+                                ui.add_sized(
+                                    egui::Vec2::new(CHARACTER_WIDTH * 3.0, ROW_HEIGHT),
+                                    egui::Label::new("")
+                                );
+                            });
+                            
+                            // 第三行：游戏窗口 | 就绪/未就绪
+                            let game_window_ready = modules::screen_capture_thread::is_apex_window_ready();
+                            ui.horizontal(|ui| {
+                                ui.add_sized(
+                                    egui::Vec2::new(CHARACTER_WIDTH * 5.8, ROW_HEIGHT),
+                                    egui::Label::new("游戏窗口")
+                                );
+                                
+                                ui.add_sized(
+                                    egui::Vec2::new(CHARACTER_WIDTH * 4.0, ROW_HEIGHT),
+                                    egui::Label::new(
+                                        egui::RichText::new(if game_window_ready { "就绪" } else { "未就绪" })
+                                            .color(if game_window_ready { GREEN } else { RED })
+                                    )
+                                );
+                                
                                 ui.add_sized(
                                     egui::Vec2::new(CHARACTER_WIDTH * 3.0, ROW_HEIGHT),
                                     egui::Label::new("")

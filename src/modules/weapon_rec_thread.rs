@@ -19,8 +19,8 @@ use std::num::NonZeroU32;
 
 use crate::utils::console_redirect::log_error;
 
-const TARGET_W: u32 = 159;
-const TARGET_H: u32 = 38;
+pub const TARGET_W: u32 = 159;
+pub const TARGET_H: u32 = 38;
 const CANNY_LOW: f32 = 50.0;
 const CANNY_HIGH: f32 = 150.0;
 const EDGE_THRESHOLD: u8 = 128;
@@ -91,6 +91,26 @@ fn resize_to_target(rgb: &[u8], src_w: usize, src_h: usize) -> Result<Vec<u8>> {
     Ok(dst_image.buffer().to_vec())
 }
 
+/// ROI 灰度图 min-max 线性拉伸到 0–255，提升亮场景下的边缘对比度
+fn linear_stretch_contrast(gray: &GrayImage) -> GrayImage {
+    let (min_val, max_val) = gray
+        .pixels()
+        .fold((255u8, 0u8), |(min_v, max_v), p| (min_v.min(p[0]), max_v.max(p[0])));
+    if max_val <= min_val {
+        return gray.clone();
+    }
+    let range = (max_val - min_val) as f32;
+    let mut out = GrayImage::new(gray.width(), gray.height());
+    for y in 0..gray.height() {
+        for x in 0..gray.width() {
+            let v = gray.get_pixel(x, y)[0];
+            let stretched = ((v - min_val) as f32 / range * 255.0).round().clamp(0.0, 255.0) as u8;
+            out.put_pixel(x, y, Luma([stretched]));
+        }
+    }
+    out
+}
+
 /// 计算相似度：匹配的边缘像素数 / 模板边缘像素总数
 fn similarity(live: &GrayImage, template: &GrayImage, template_edge_count: u32) -> f32 {
     if template_edge_count == 0 {
@@ -116,6 +136,8 @@ pub struct WeaponRecThread {
     handle: Option<JoinHandle<()>>,
     result: Arc<Mutex<String>>,
     match_latency_ms: Arc<Mutex<f32>>,
+    /// 最近一帧的 live canny 图（右下角 ROI 做 Canny 后的灰度），用于预览。尺寸 TARGET_W×TARGET_H。
+    canny_pixels: Arc<Mutex<Option<Vec<u8>>>>,
     error_flag: Arc<AtomicBool>,
 }
 
@@ -134,11 +156,13 @@ impl WeaponRecThread {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let result = Arc::new(Mutex::new(String::new()));
         let match_latency_ms = Arc::new(Mutex::new(0.0f32));
+        let canny_pixels = Arc::new(Mutex::new(None));
         let error_flag = Arc::new(AtomicBool::new(false));
 
         let stop_clone = stop_flag.clone();
         let result_clone = result.clone();
         let match_latency_ms_clone = match_latency_ms.clone();
+        let canny_pixels_clone = canny_pixels.clone();
         let _error_flag_clone = error_flag.clone();
 
         let handle = thread::spawn(move || {
@@ -184,7 +208,11 @@ impl WeaponRecThread {
                     Some(g) => g,
                     None => continue,
                 };
+                let gray = linear_stretch_contrast(&gray);
                 let live_canny = canny(&gray, CANNY_LOW, CANNY_HIGH);
+                if let Ok(mut guard) = canny_pixels_clone.lock() {
+                    *guard = Some(live_canny.as_raw().to_vec());
+                }
 
                 let best = templates
                     .iter()
@@ -211,12 +239,18 @@ impl WeaponRecThread {
             handle: Some(handle),
             result,
             match_latency_ms,
+            canny_pixels,
             error_flag,
         })
     }
 
     pub fn result(&self) -> Arc<Mutex<String>> {
         self.result.clone()
+    }
+
+    /// 最近一帧的 live canny 图像素（TARGET_W×TARGET_H 灰度），用于推理预览窗口。
+    pub fn canny_pixels(&self) -> Arc<Mutex<Option<Vec<u8>>>> {
+        self.canny_pixels.clone()
     }
 
     /// 单次武器匹配耗时（ms）
