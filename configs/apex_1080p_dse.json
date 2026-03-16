@@ -35,5 +35,12 @@
     }
   },
   "rapid_fire_mode": "根据枪械自动切换",
-  "license_code": "forthegloriouspurpose"
+  "license_code": "forthegloriouspurpose",
+  "special_weapons_aim_and_fire": [],
+  "special_weapons_release_to_fire": [
+    "sentinel",
+    "triple_take",
+    "kraber",
+    "peacekeeper"
+  ]
 }

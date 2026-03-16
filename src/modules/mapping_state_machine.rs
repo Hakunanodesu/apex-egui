@@ -60,6 +60,9 @@ pub struct MappingManager {
     vertical_str: Arc<Mutex<String>>,
     aim_height: Arc<Mutex<String>>,
     rapid_fire_mode: Arc<AtomicU8>, // 连点模式：0=关闭, 1=始终连点, 2=半按扳机连点
+    // 特殊枪械设定
+    special_weapons_aim_and_fire: Vec<String>,
+    special_weapons_release_to_fire: Vec<String>,
     
     // 状态标志
     device_available: bool,
@@ -101,6 +104,8 @@ impl MappingManager {
             vertical_str,
             aim_height,
             rapid_fire_mode,
+            special_weapons_aim_and_fire: Vec::new(),
+            special_weapons_release_to_fire: Vec::new(),
             device_available: false,
             last_error_check: Instant::now(),
         }
@@ -130,9 +135,16 @@ impl MappingManager {
     }
     
     // 请求启动映射（con_mapping 从当前配置的手柄键位调试内容读取）
-    pub fn request_start(&mut self, con_mapping: Option<ConMapping>) {
+    pub fn request_start(
+        &mut self,
+        con_mapping: Option<ConMapping>,
+        special_weapons_aim_and_fire: Vec<String>,
+        special_weapons_release_to_fire: Vec<String>,
+    ) {
         if matches!(self.state, MappingState::Idle) {
             self.con_mapping = con_mapping;
+            self.special_weapons_aim_and_fire = special_weapons_aim_and_fire;
+            self.special_weapons_release_to_fire = special_weapons_release_to_fire;
             self.state = MappingState::CheckingDevice;
         }
     }
@@ -411,13 +423,16 @@ impl MappingManager {
             let state = reader.state();
             let ready = reader.ready();
             let weapon_rec_result = self.weapon_rec.as_ref().map(|w| w.result());
-            let rapid_fire_weapons: Vec<String> = RAPID_FIRE_WEAPONS.iter().map(|s| (*s).to_string()).collect();
+            let rapid_fire_weapons: Vec<String> =
+                RAPID_FIRE_WEAPONS.iter().map(|s| (*s).to_string()).collect();
+            let special_aim = self.special_weapons_aim_and_fire.clone();
+            let special_release = self.special_weapons_release_to_fire.clone();
             
             self.con_mapper = Some(ConMapper::start(
                 state, virtual_gamepad_ref, ready, Some(det.result()),
                 params.0, params.1, params.2, params.3, params.4,
                 params.5, params.6, params.7, params.8, self.aim_enable.clone(), self.rapid_fire_mode.clone(),
-                weapon_rec_result, rapid_fire_weapons,
+                weapon_rec_result, rapid_fire_weapons, special_aim, special_release,
             ));
         }
         

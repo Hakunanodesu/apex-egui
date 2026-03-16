@@ -105,7 +105,9 @@ impl ConMapper {
         aim_enable: Arc<AtomicBool>,
         rapid_fire_mode: Arc<AtomicU8>, // 0=关闭, 1=始终连点, 2=半按, 3=完全按下连点, 4=根据枪械自动切换
         weapon_rec_result: Option<Arc<Mutex<String>>>, // 枪械识别结果（模板名无后缀）
-        rapid_fire_weapons: Vec<String>,                // 连点白名单
+        rapid_fire_weapons: Vec<String>,               // 连点白名单
+        special_weapons_aim_and_fire: Vec<String>,     // 特殊枪械：强制瞄准和开火
+        special_weapons_release_to_fire: Vec<String>,  // 特殊枪械：松手开火
     ) -> Self {
         let stop_flag = Arc::new(AtomicBool::new(false));
         let error_flag = Arc::new(AtomicBool::new(false));
@@ -117,6 +119,8 @@ impl ConMapper {
         let rapid_fire_mode_clone = rapid_fire_mode.clone();
         let weapon_rec_result_clone = weapon_rec_result.clone();
         let rapid_fire_weapons = rapid_fire_weapons;
+        let special_weapons_aim_and_fire = special_weapons_aim_and_fire;
+        let special_weapons_release_to_fire = special_weapons_release_to_fire;
 
         let handle = thread::spawn(move || {
             // 等待 SDL 读取线程就绪
@@ -133,6 +137,10 @@ impl ConMapper {
             const MAX_CONSECUTIVE_ERRORS: u32 = 50;
             // 连点模式：根据当前输出状态反转扳机状态
             let mut rapid_high: bool = false;
+            // 松手开火：记录上一帧右扳机是否按下
+            let mut release_prev_pressed: bool = false;
+            // 松手开火：松开后维持扳机脉冲的剩余帧数
+            let mut release_pulse_frames: u8 = 0;
 
             while !stop_clone.load(Ordering::SeqCst) {
                 let orig_state = match state_clone.lock() {
@@ -150,22 +158,71 @@ impl ConMapper {
                 }; // 每次都用原始state
                 let mut mapped_state = orig_state.clone();
                 
+                // 根据当前识别到的武器，判断是否属于特殊枪械
+                let is_release_weapon = if let Some(ref weapon_arc) = weapon_rec_result_clone {
+                    if let Ok(weapon_name) = weapon_arc.lock() {
+                        special_weapons_release_to_fire.contains(&*weapon_name)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                let is_aim_override_weapon = if let Some(ref weapon_arc) = weapon_rec_result_clone {
+                    if let Ok(weapon_name) = weapon_arc.lock() {
+                        special_weapons_aim_and_fire.contains(&*weapon_name)
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
                 // 预先检查左右扳机是否按下
                 let right_trigger_pressed = orig_state.right_trigger > 0;
                 let left_trigger_pressed = orig_state.left_trigger > 0;
 
+                // 松手开火逻辑：对特殊武器生效
+                if is_release_weapon {
+                    if right_trigger_pressed {
+                        // 按住阶段不触发开火：强制为 0，并清空后续脉冲
+                        mapped_state.right_trigger = 0;
+                        release_prev_pressed = true;
+                        release_pulse_frames = 0;
+                    } else {
+                        // 从按下到松开的瞬间：启动一个持续若干帧的开火脉冲
+                        if release_prev_pressed {
+                            release_pulse_frames = 10;
+                            release_prev_pressed = false;
+                        }
+
+                        if release_pulse_frames > 0 {
+                            mapped_state.right_trigger = 255;
+                            release_pulse_frames -= 1;
+                        } else {
+                            mapped_state.right_trigger = 0;
+                        }
+                    }
+                } else {
+                    // 非松手开火武器时重置状态
+                    release_prev_pressed = false;
+                    release_pulse_frames = 0;
+                }
+
                 // 控制扳机输出
                 let rf_mode = rapid_fire_mode_clone.load(Ordering::SeqCst);
-                if rf_mode > 0 && right_trigger_pressed {
+                if rf_mode > 0 && right_trigger_pressed && !is_release_weapon {
                     let should_rapid = match rf_mode {
                         1 => true,                             // 始终连点
                         2 => orig_state.right_trigger < 255,   // 半按连点，满值时按住
                         3 => orig_state.right_trigger == 255,  // 完全按下才连点，否则按住
                         4 => {
-                            // 根据枪械识别结果：在白名单内则连点
+                            // 根据枪械识别结果：在白名单内则连点；被标记为“松手开火”的武器在这里被排除
                             if let Some(ref weapon_arc) = weapon_rec_result_clone {
                                 if let Ok(weapon_name) = weapon_arc.lock() {
                                     rapid_fire_weapons.contains(&*weapon_name)
+                                        && !special_weapons_release_to_fire.contains(&*weapon_name)
                                 } else {
                                     false
                                 }
@@ -193,7 +250,9 @@ impl ConMapper {
                                 if let Some(d) = detections.first() {
                                     // 当右扳机按下时总是计算并应用结果
                                     // 当aim_enable为true且左扳机按下时也计算并应用结果
-                                    if right_trigger_pressed || (aim_enable.load(Ordering::SeqCst) && left_trigger_pressed) {
+                                    // 特殊枪械可强制启用“瞄准和开火”模式
+                                    let aim_enabled = aim_enable.load(Ordering::SeqCst) || is_aim_override_weapon;
+                                    if right_trigger_pressed || (aim_enabled && left_trigger_pressed) {
                                         apply_right_trigger_adjustment(
                                             &mut mapped_state,
                                             d,

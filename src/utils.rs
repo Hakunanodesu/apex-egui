@@ -97,6 +97,12 @@ pub struct ConfigFile {
     /// 许可证代码，首次为空字符串，用户填写后保存
     #[serde(default)]
     pub license_code: String,
+    /// 特殊枪械：强制使用“瞄准和开火”模式
+    #[serde(default)]
+    pub special_weapons_aim_and_fire: Vec<String>,
+    /// 特殊枪械：按下不开火，松手开火一次
+    #[serde(default)]
+    pub special_weapons_release_to_fire: Vec<String>,
 }
 
 /// 读取 configs/.current 文件，返回当前配置和模型

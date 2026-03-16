@@ -9,8 +9,8 @@ use std::path::Path;
 mod utils;
 mod modules;
 use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_height, load_config_file, save_config_file, save_current_config, ConfigFile, ConMapping, check_dir_exist};
-use modules::screen_capture_thread::capture_frame_dimensions;
 use modules::update_check::{check_github_update, UpdateCheckResult, UpdateInfo};
+use modules::gamepad_mapping_thread::RAPID_FIRE_WEAPONS;
 use utils::enum_device_tool::enumerate_controllers;
 use modules::mapping_state_machine::MappingManager;
 use modules::weapon_rec_thread::{TARGET_W as CANNY_W, TARGET_H as CANNY_H};
@@ -73,6 +73,10 @@ fn main() -> Result<(), eframe::Error> {
                 // 设置间距
                 style.spacing.item_spacing.x = SPACING;
                 style.spacing.item_spacing.y = SPACING;
+
+                // 设置 tooltip 延迟
+                style.interaction.tooltip_delay = 0.0; // 单位：秒
+                style.interaction.show_tooltips_only_when_still = true;
             });
             
             // 创建应用实例，屏幕高度将在第一次 update 时获取
@@ -185,6 +189,9 @@ struct MyApp {
     // 吸附方式选择
     aa_activate_mode_selected: String,
     aa_activate_mode_items: Vec<String>,
+    // 特殊枪械设定
+    special_weapons_aim_and_fire: Vec<String>,
+    special_weapons_release_to_fire: Vec<String>,
     
     // 屏幕高度（在应用启动时获取）
     screen_height: f32,
@@ -247,9 +254,6 @@ struct MyApp {
     inference_preview_window_created: bool, // 推理预览窗口是否已创建
     preview_allowed: bool, // 预览是否允许显示（需要智慧核心运行）
 
-    // 截图尺寸缓存（切换到辅助功能tab时刷新）
-    capture_dimensions_text: String,
-
     // 启动时检查 GitHub 更新（有更新时在辅助功能右侧显示“有更新可用”）
     update_available: Arc<Mutex<Option<UpdateInfo>>>,
     update_check_started: bool,
@@ -257,6 +261,8 @@ struct MyApp {
     update_check_failure: Arc<Mutex<Option<String>>>,
     /// 是否正在执行检查更新（防止重复点击）
     update_check_in_progress: Arc<AtomicBool>,
+    /// 最近一次检查结果是否为“已是最新版本”
+    update_is_latest: Arc<AtomicBool>,
 
     // 调试输出
     debug_enabled: bool,
@@ -352,6 +358,8 @@ impl Default for MyApp {
             ],
             aa_activate_mode_selected: String::new(),
             aa_activate_mode_items: vec!["瞄准和开火".to_string(), "仅开火".to_string()],
+            special_weapons_aim_and_fire: Vec::new(),
+            special_weapons_release_to_fire: Vec::new(),
             screen_height,
             min_outer_diameter: 0.0,
             outer_diameter: 0.0,
@@ -388,11 +396,11 @@ impl Default for MyApp {
             show_inference_preview: false,
             inference_preview_window_created: false,
             preview_allowed: false,
-            capture_dimensions_text: "游戏窗口未激活".to_string(),
             update_available: Arc::new(Mutex::new(None)),
             update_check_started: false,
             update_check_failure: Arc::new(Mutex::new(None)),
             update_check_in_progress: Arc::new(AtomicBool::new(false)),
+            update_is_latest: Arc::new(AtomicBool::new(false)),
             debug_enabled: false,
             show_debug_window: false,
             debug_axis_lx: String::new(),
@@ -491,6 +499,8 @@ impl MyApp {
     fn load_config(&mut self, config: &ConfigFile) {
         self.use_controller = config.use_controller;
         self.aa_activate_mode_selected = config.aa_activate_mode.clone();
+        self.special_weapons_aim_and_fire = config.special_weapons_aim_and_fire.clone();
+        self.special_weapons_release_to_fire = config.special_weapons_release_to_fire.clone();
         self.rapid_fire_mode_selected = if config.rapid_fire_mode.is_empty() {
             "不启用连点".to_string()
         } else {
@@ -600,6 +610,8 @@ impl MyApp {
             con_mapping: Some(self.debug_to_con_mapping()),
             rapid_fire_mode: self.rapid_fire_mode_selected.clone(),
             license_code: self.license_key.clone(),
+            special_weapons_aim_and_fire: self.special_weapons_aim_and_fire.clone(),
+            special_weapons_release_to_fire: self.special_weapons_release_to_fire.clone(),
         }
     }
     
@@ -731,7 +743,10 @@ impl MyApp {
             
             // 使用 MappingManager 启动
             let con_mapping = Some(self.debug_to_con_mapping());
-            self.mapping_manager.request_start(con_mapping);
+            let special_aim = self.special_weapons_aim_and_fire.clone();
+            let special_release = self.special_weapons_release_to_fire.clone();
+            self.mapping_manager
+                .request_start(con_mapping, special_aim, special_release);
             self.core_enabled = true;
             self.preview_allowed = false;
         }
@@ -764,6 +779,8 @@ impl MyApp {
             con_mapping: Some(ConMapping::default()),
             rapid_fire_mode: "不启用连点".to_string(),
             license_code: String::new(),
+            special_weapons_aim_and_fire: Vec::new(),
+            special_weapons_release_to_fire: Vec::new(),
         }
     }
 
@@ -784,6 +801,7 @@ impl eframe::App for MyApp {
         if !self.update_check_started {
             self.update_check_started = true;
             let result = self.update_available.clone();
+            let latest_arc = self.update_is_latest.clone();
             let current = env!("CARGO_PKG_VERSION").to_string();
             std::thread::spawn(move || {
                 match check_github_update() {
@@ -792,12 +810,15 @@ impl eframe::App for MyApp {
                         if let Ok(mut guard) = result.lock() {
                             *guard = Some(info);
                         }
+                        latest_arc.store(false, Ordering::Relaxed);
                     }
                     UpdateCheckResult::UpToDate { latest_version } => {
                         println!("当前版本: {}, 已是最新 (远程: {})", current, latest_version);
+                        latest_arc.store(true, Ordering::Relaxed);
                     }
                     UpdateCheckResult::CheckFailed(reason) => {
                         println!("当前版本: {}, 检查失败: {}", current, reason);
+                        latest_arc.store(false, Ordering::Relaxed);
                     }
                 }
             });
@@ -835,6 +856,14 @@ impl eframe::App for MyApp {
         if !self.mapping_manager.is_active() && self.core_enabled {
             self.core_enabled = false;
             self.preview_allowed = false;
+
+            // 智慧核心意外关闭时，关闭推理预览窗口
+            if self.inference_preview_window_created {
+                let viewport_id = egui::ViewportId::from_hash_of("inference_preview_window");
+                ctx.send_viewport_cmd_to(viewport_id, egui::ViewportCommand::Close);
+                self.inference_preview_window_created = false;
+                self.show_inference_preview = false;
+            }
         }
 
         // Debug：按 Backspace 保存当前帧武器识别 live 图（159×38）到当前工作目录 gun_template/编号.png
@@ -1533,7 +1562,7 @@ impl eframe::App for MyApp {
                         let combo_width = ui.available_width() - SPACING;
                         let old_mode = self.rapid_fire_mode_selected.clone();
                         ui.add_enabled_ui(self.use_controller, |ui| {
-                            egui::ComboBox::from_id_source("rapid_fire_combo")
+                            let inner = egui::ComboBox::from_id_source("rapid_fire_combo")
                                 .width(combo_width)
                                 .selected_text(&self.rapid_fire_mode_selected)
                                 .show_ui(ui, |ui| {
@@ -1541,6 +1570,13 @@ impl eframe::App for MyApp {
                                         ui.selectable_value(&mut self.rapid_fire_mode_selected, item.clone(), item);
                                     }
                                 });
+
+                            if self.rapid_fire_mode_selected == "根据枪械自动切换" {
+                                inner.response.on_hover_ui(|ui| {
+                                    ui.set_max_width(CHARACTER_WIDTH * 32.0);
+                                    ui.label(RAPID_FIRE_WEAPONS.join(", "));
+                                });
+                            }
                         });
 
                         if self.rapid_fire_mode_selected != old_mode {
@@ -1550,32 +1586,139 @@ impl eframe::App for MyApp {
                         }
                     });
 
+                    // “连点触发方式” 下方的分隔线
                     ui.separator();
 
+                    // “特殊枪械设定” 标题行
                     ui.horizontal(|ui| {
                         ui.add_sized(
-                            egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
-                            egui::Label::new("截图尺寸")
-                        );
-                        ui.add_sized(
-                            egui::Vec2::new(ui.available_width() - SPACING, ROW_HEIGHT),
-                            egui::Label::new(&self.capture_dimensions_text)
+                            egui::Vec2::new(CHARACTER_WIDTH * 7.0, ROW_HEIGHT),
+                            egui::Label::new("特殊枪械设定")
                         );
                     });
 
+                    // “特殊枪械设定” 下方的缩进 + 分隔结构（可滚动区域）
                     ui.horizontal(|ui| {
-                        if ui.add_sized(
-                            egui::Vec2::new(CHARACTER_WIDTH * 3.0, ROW_HEIGHT),
-                            egui::Button::new("刷新")
-                        ).clicked() {
-                            if let Ok((w, h)) = capture_frame_dimensions() {
-                                if w > 0 && h > 0 {
-                                    self.capture_dimensions_text = format!("{}×{}", w, h);
-                                }
-                            }
-                        }
+                        ui.add_sized(
+                            egui::Vec2::new(CHARACTER_WIDTH, ROW_HEIGHT),
+                            egui::Label::new("")
+                        );
+
+                        ui.vertical(|ui| {
+                            ui.separator();
+
+                            // 表头固定，不随滚动移动
+                            ui.horizontal(|ui| {
+                                let width = ui.available_width() / 3.0 - SPACING * 2.0;
+                                ui.add_sized(
+                                    egui::Vec2::new(width, ROW_HEIGHT),
+                                    egui::Label::new("")
+                                );
+                                ui.add_sized(
+                                    egui::Vec2::new(width, ROW_HEIGHT),
+                                    egui::Label::new("开镜吸附")
+                                );
+                                ui.add_sized(
+                                    egui::Vec2::new(width, ROW_HEIGHT),
+                                    egui::Label::new("松手开火")
+                                );
+                            });
+
+                            egui::ScrollArea::vertical()
+                                .min_scrolled_height(ROW_HEIGHT * 4.0 + SPACING * 3.0)
+                                .show(ui, |ui| {
+                                    // 每行列宽（滚动区域内单独计算一次）
+                                    let width = ui.available_width() / 3.0 - SPACING * 2.0;
+
+                                    // 特殊枪械行
+                                    let special_rows = [
+                                        "mastiff",
+                                        "peacekeeper",
+                                        "kraber",
+                                        "triple_take",
+                                        "sentinel",
+                                    ];
+
+                                    for name in special_rows {
+                                        ui.horizontal(|ui| {
+                                            // 武器名
+                                            ui.add_sized(
+                                                egui::Vec2::new(width, ROW_HEIGHT),
+                                                egui::Label::new(name),
+                                            );
+
+                                            // 开镜瞄准
+                                            let mut aim_checked =
+                                                self.special_weapons_aim_and_fire.contains(&name.to_string());
+                                            if ui
+                                                .add_sized(
+                                                    egui::Vec2::new(width, ROW_HEIGHT),
+                                                    egui::Checkbox::without_text(&mut aim_checked),
+                                                )
+                                                .changed()
+                                            {
+                                                if aim_checked {
+                                                    let weapon_name = name.to_string();
+                                                    if !self
+                                                        .special_weapons_aim_and_fire
+                                                        .contains(&weapon_name)
+                                                    {
+                                                        self
+                                                            .special_weapons_aim_and_fire
+                                                            .push(weapon_name.clone());
+                                                    }
+                                                    // 互斥：勾选“开镜吸附”时，取消“松手开火”
+                                                    self
+                                                        .special_weapons_release_to_fire
+                                                        .retain(|s| s != &weapon_name);
+                                                } else {
+                                                    self
+                                                        .special_weapons_aim_and_fire
+                                                        .retain(|s| s != name);
+                                                }
+                                                self.mark_config_changed();
+                                                self.save_config();
+                                            }
+
+                                            // 松手开火
+                                            let mut release_checked =
+                                                self.special_weapons_release_to_fire.contains(&name.to_string());
+                                            if ui
+                                                .add_sized(
+                                                    egui::Vec2::new(width, ROW_HEIGHT),
+                                                    egui::Checkbox::without_text(&mut release_checked),
+                                                )
+                                                .changed()
+                                            {
+                                                if release_checked {
+                                                    let weapon_name = name.to_string();
+                                                    if !self
+                                                        .special_weapons_release_to_fire
+                                                        .contains(&weapon_name)
+                                                    {
+                                                        self
+                                                            .special_weapons_release_to_fire
+                                                            .push(weapon_name.clone());
+                                                    }
+                                                    // 互斥：勾选“松手开火”时，取消“开镜吸附”
+                                                    self
+                                                        .special_weapons_aim_and_fire
+                                                        .retain(|s| s != &weapon_name);
+                                                } else {
+                                                    self
+                                                        .special_weapons_release_to_fire
+                                                        .retain(|s| s != name);
+                                                }
+                                                self.mark_config_changed();
+                                                self.save_config();
+                                            }
+                                        });
+                                    }
+                                });
+                        });
                     });
 
+                    // 与下方更新检查区域的分隔线
                     ui.separator();
 
                     // 检查更新 + “?” 帮助按钮（同一行）
@@ -1591,9 +1734,11 @@ impl eframe::App for MyApp {
                             if let Ok(mut g) = self.update_check_failure.lock() {
                                 *g = None;
                             }
+                            self.update_is_latest.store(false, Ordering::Relaxed);
                             let result_arc = self.update_available.clone();
                             let failure_arc = self.update_check_failure.clone();
                             let progress_arc = self.update_check_in_progress.clone();
+                            let latest_arc = self.update_is_latest.clone();
                             std::thread::spawn(move || {
                                 let res = check_github_update();
                                 progress_arc.store(false, Ordering::Relaxed);
@@ -1602,17 +1747,23 @@ impl eframe::App for MyApp {
                                         if let Ok(mut guard) = result_arc.lock() {
                                             *guard = Some(info);
                                         }
+                                        latest_arc.store(false, Ordering::Relaxed);
                                     }
-                                    UpdateCheckResult::UpToDate { .. } => {}
+                                    UpdateCheckResult::UpToDate { .. } => {
+                                        latest_arc.store(true, Ordering::Relaxed);
+                                    }
                                     UpdateCheckResult::CheckFailed(reason) => {
                                         if let Ok(mut guard) = failure_arc.lock() {
                                             *guard = Some(reason);
                                         }
+                                        latest_arc.store(false, Ordering::Relaxed);
                                     }
                                 }
                             });
                         }
                         let update_url = self.update_available.lock().ok().and_then(|g| g.as_ref().map(|i| i.url.clone()));
+                        let failure_opt = self.update_check_failure.lock().ok().and_then(|g| g.clone());
+                        let is_latest = self.update_is_latest.load(Ordering::Relaxed);
                         if let Some(url) = update_url {
                             let link = egui::Link::new(egui::RichText::new("有更新可用").color(YELLOW));
                             if ui.add_sized(
@@ -1621,19 +1772,21 @@ impl eframe::App for MyApp {
                             ).clicked() {
                                 let _ = open::that(&url);
                             }
-                        } else if let Ok(guard) = self.update_check_failure.lock() {
-                            if let Some(ref reason) = *guard {
-                                let label = egui::Label::new(egui::RichText::new("检查失败").color(RED));
-                                let r = ui.add_sized(
-                                    egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
-                                    label
-                                );
-                                let reason = reason.clone();
-                                r.on_hover_ui(move |ui| {
-                                    ui.set_max_width(CHARACTER_WIDTH * 32.0);
-                                    ui.add(egui::Label::new(&reason).wrap(true));
-                                });
-                            }
+                        } else if let Some(reason) = failure_opt {
+                            let label = egui::Label::new(egui::RichText::new("检查失败").color(RED));
+                            let r = ui.add_sized(
+                                egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
+                                label
+                            );
+                            r.on_hover_ui(move |ui| {
+                                ui.set_max_width(CHARACTER_WIDTH * 32.0);
+                                ui.add(egui::Label::new(&reason).wrap(true));
+                            });
+                        } else if is_latest {
+                            ui.add_sized(
+                                egui::Vec2::new(CHARACTER_WIDTH * 6.0, ROW_HEIGHT),
+                                egui::Label::new(egui::RichText::new("已是最新版本").color(GREEN))
+                            );
                         }
                         ui.add_sized(
                             egui::Vec2::new(ui.available_width() - CHARACTER_WIDTH * 1.6 - SPACING, ROW_HEIGHT),
