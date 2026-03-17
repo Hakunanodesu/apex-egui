@@ -19,17 +19,11 @@ use windows_capture::{
     window::Window,
 };
 
+use crate::shared_constants::capture::{
+    APEX_WINDOW_TITLE, BASE_WIDTH, WEAPON_ROI_CROP_H, WEAPON_ROI_CROP_W,
+    WEAPON_ROI_INTERVAL_MS, WEAPON_ROI_OFFSET_X, WEAPON_ROI_OFFSET_Y,
+};
 use crate::utils::console_redirect::log_error;
-
-/// 用于查找 Apex 英雄窗口的标题（标题必须完全等于此字符串）
-const APEX_WINDOW_TITLE: &str = "Apex Legends";
-
-const BASE_HEIGHT: f32 = 1080.0;
-const WEAPON_ROI_OFFSET_X: f32 = 377.0;
-const WEAPON_ROI_OFFSET_Y: f32 = 122.0;
-const WEAPON_ROI_CROP_W: f32 = 159.0;
-const WEAPON_ROI_CROP_H: f32 = 38.0;
-const WEAPON_ROI_INTERVAL_MS: u64 = 500;
 
 /// Handler 中持有的状态
 struct CaptureHandler {
@@ -189,7 +183,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 Some(t) => t.elapsed() >= Duration::from_millis(WEAPON_ROI_INTERVAL_MS),
             };
             if should_write {
-                let scale = height_full as f32 / BASE_HEIGHT;
+                let scale = width_full as f32 / BASE_WIDTH;
                 let x_start = width_full.saturating_sub((WEAPON_ROI_OFFSET_X * scale).round() as usize);
                 let y_start = height_full.saturating_sub((WEAPON_ROI_OFFSET_Y * scale).round() as usize);
                 let crop_w = (WEAPON_ROI_CROP_W * scale).round() as usize;

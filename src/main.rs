@@ -8,25 +8,26 @@ use std::path::Path;
 
 mod utils;
 mod modules;
+mod shared_constants;
 use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_height, load_config_file, save_config_file, save_current_config, ConfigFile, ConMapping, check_dir_exist};
 use modules::update_check::{check_github_update, UpdateCheckResult, UpdateInfo};
-use modules::gamepad_mapping_thread::RAPID_FIRE_WEAPONS;
+use shared_constants::RAPID_FIRE_WEAPONS;
+use shared_constants::auth::LICENSE_CODE;
+use shared_constants::defaults;
+use shared_constants::ui::{
+    AA_ACTIVATE_MODE_ITEMS, CHARACTER_WIDTH, GREEN_RGB, RAPID_FIRE_MODE_ALWAYS,
+    RAPID_FIRE_MODE_AUTO, RAPID_FIRE_MODE_FULL_TRIGGER, RAPID_FIRE_MODE_HALF_TRIGGER,
+    RAPID_FIRE_MODE_ITEMS, RED_RGB, ROW_HEIGHT, SPACING, YELLOW_RGB,
+};
 use utils::enum_device_tool::enumerate_controllers;
 use modules::mapping_state_machine::MappingManager;
-use modules::weapon_rec_thread::{TARGET_W as CANNY_W, TARGET_H as CANNY_H};
+use shared_constants::weapon_rec::{TEMPLATE_H as CANNY_H, TEMPLATE_W as CANNY_W};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 
-const CHARACTER_WIDTH: f32 = 12.0; // 英文字体宽度为 CHARACTER_WIDTH * 0.6
-const SPACING: f32 = 8.0;
-const ROW_HEIGHT: f32 = 18.0; // separator 的高度为 ROW_HEIGHT / 3.0
-
-// 颜色常量
-const GREEN: egui::Color32 = egui::Color32::from_rgb(41, 157, 143);
-const YELLOW: egui::Color32 = egui::Color32::from_rgb(233, 196, 106);
-const RED: egui::Color32 = egui::Color32::from_rgb(216, 118, 89);
-
-/// 正确的许可证代码，用于校验及决定是否在输入框中回显
-const LICENSE_CODE: &str = "forthegloriouspurpose";
+// 颜色值统一在 shared_constants，UI 内部仍使用 Color32 类型常量
+const GREEN: egui::Color32 = egui::Color32::from_rgb(GREEN_RGB.0, GREEN_RGB.1, GREEN_RGB.2);
+const YELLOW: egui::Color32 = egui::Color32::from_rgb(YELLOW_RGB.0, YELLOW_RGB.1, YELLOW_RGB.2);
+const RED: egui::Color32 = egui::Color32::from_rgb(RED_RGB.0, RED_RGB.1, RED_RGB.2);
 
 /// 从编译期嵌入的 PNG 生成窗口/标题栏图标（IconData）
 fn load_window_icon() -> Option<egui::viewport::IconData> {
@@ -348,16 +349,10 @@ impl Default for MyApp {
             add_config_dialog: None,
             use_controller: false, // 默认不使用手柄
             rapid_fire_mode,
-            rapid_fire_mode_selected: "不启用连点".to_string(),
-            rapid_fire_mode_items: vec![
-                "不启用连点".to_string(),
-                "根据枪械自动切换".to_string(),
-                "半按扳机连点".to_string(),
-                "完全按下扳机连点".to_string(),
-                "始终连点".to_string(),
-            ],
+            rapid_fire_mode_selected: defaults::RAPID_FIRE_MODE.to_string(),
+            rapid_fire_mode_items: RAPID_FIRE_MODE_ITEMS.iter().map(|s| (*s).to_string()).collect(),
             aa_activate_mode_selected: String::new(),
-            aa_activate_mode_items: vec!["瞄准和开火".to_string(), "仅开火".to_string()],
+            aa_activate_mode_items: AA_ACTIVATE_MODE_ITEMS.iter().map(|s| (*s).to_string()).collect(),
             special_weapons_aim_and_fire: Vec::new(),
             special_weapons_release_to_fire: Vec::new(),
             screen_height,
@@ -754,30 +749,25 @@ impl MyApp {
     
     /// 创建默认配置（仅在新建时转换，根据屏幕高度转换直径值）
     fn create_default_config(screen_height: f32) -> ConfigFile {
-        // 1440p 基准值
-        let base_inner_diameter = 60.0;
-        let base_middle_diameter = 60.0;
-        let base_outer_diameter = 320.0;
-        
         // 转换为当前屏幕高度的比例值
-        let scale = screen_height / 1440.0;
+        let scale = screen_height / defaults::BASE_SCREEN_HEIGHT;
         
         ConfigFile {
-            aim_height_coefficient: 0.6,
+            aim_height_coefficient: defaults::AIM_HEIGHT_COEFFICIENT,
             assist_curve: utils::AssistCurve {
-                deadzone: 0.0,
-                hipfire: 0.5,
-                inner_diameter: base_inner_diameter * scale,
-                inner_strength: 0.72,
-                middle_diameter: base_middle_diameter * scale,
-                outer_diameter: base_outer_diameter * scale,
-                outer_strength: 0.36,
+                deadzone: defaults::DEADZONE,
+                hipfire: defaults::HIPFIRE,
+                inner_diameter: defaults::BASE_INNER_DIAMETER * scale,
+                inner_strength: defaults::INNER_STRENGTH,
+                middle_diameter: defaults::BASE_MIDDLE_DIAMETER * scale,
+                outer_diameter: defaults::BASE_OUTER_DIAMETER * scale,
+                outer_strength: defaults::OUTER_STRENGTH,
             },
-            aa_activate_mode: "仅开火".to_string(),
+            aa_activate_mode: defaults::AA_ACTIVATE_MODE.to_string(),
             use_controller: false,
-            vertical_strength_coefficient: 0.4,
+            vertical_strength_coefficient: defaults::VERTICAL_STRENGTH_COEFFICIENT,
             con_mapping: Some(ConMapping::default()),
-            rapid_fire_mode: "不启用连点".to_string(),
+            rapid_fire_mode: defaults::RAPID_FIRE_MODE.to_string(),
             license_code: String::new(),
             special_weapons_aim_and_fire: Vec::new(),
             special_weapons_release_to_fire: Vec::new(),
@@ -786,10 +776,10 @@ impl MyApp {
 
     fn rapid_fire_mode_to_u8(mode: &str) -> u8 {
         match mode {
-            "始终连点" => 1,
-            "半按扳机连点" => 2,
-            "完全按下扳机连点" => 3,
-            "根据枪械自动切换" => 4,
+            RAPID_FIRE_MODE_ALWAYS => 1,
+            RAPID_FIRE_MODE_HALF_TRIGGER => 2,
+            RAPID_FIRE_MODE_FULL_TRIGGER => 3,
+            RAPID_FIRE_MODE_AUTO => 4,
             _ => 0,
         }
     }

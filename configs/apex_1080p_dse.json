@@ -1,17 +1,17 @@
 {
-  "aim_height_coefficient": 0.64,
+  "aim_height_coefficient": 0.6,
   "assist_curve": {
     "deadzone": 0.0,
-    "hipfire": 0.56,
-    "inner_diameter": 45.0,
-    "inner_strength": 0.72,
+    "hipfire": 0.6,
+    "inner_diameter": 60.0,
+    "inner_strength": 0.8,
     "middle_diameter": 60.0,
     "outer_diameter": 320.0,
-    "outer_strength": 0.36
+    "outer_strength": 0.4
   },
   "aa_activate_mode": "仅开火",
   "use_controller": true,
-  "vertical_strength_coefficient": 0.96,
+  "vertical_strength_coefficient": 1.0,
   "con_mapping": {
     "axis": {
       "lx": 0,

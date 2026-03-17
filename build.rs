@@ -5,6 +5,13 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
+#[allow(dead_code)]
+mod shared_constants {
+    include!("src/shared_constants.rs");
+}
+use shared_constants::build::ICON_SIZES;
+use shared_constants::weapon_rec::{TEMPLATE_H, TEMPLATE_W};
+
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let template_dir = Path::new(&manifest_dir).join("gun_template");
@@ -14,7 +21,8 @@ fn main() {
     let src_out_path = build_dir.join("gun_templates.rs");
     fs::create_dir_all(&build_dir).expect("创建 src/build 目录失败");
 
-    let mut entries: Vec<(String, String)> = Vec::new(); // (stem, filename)
+    let mut entries: Vec<(String, u32, u32, Vec<u8>)> = Vec::new(); // (stem, width, height, gray_raw)
+    let mut size_errors: Vec<String> = Vec::new();
 
     if template_dir.is_dir() {
         if let Ok(dir) = fs::read_dir(&template_dir) {
@@ -25,18 +33,37 @@ fn main() {
                 };
                 let path = entry.path();
                 if path.extension().map_or(false, |e| e == "png") {
-                    let filename = path
-                        .file_name()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("")
-                        .to_string();
                     let stem = path
                         .file_stem()
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_string();
                     if !stem.is_empty() {
-                        entries.push((stem, filename));
+                        match image::open(&path) {
+                            Ok(img) => {
+                                let luma = img.to_luma8();
+                                let (w, h) = (luma.width(), luma.height());
+                                if w != TEMPLATE_W || h != TEMPLATE_H {
+                                    size_errors.push(format!(
+                                        "{} => {}x{} (期望 {}x{})",
+                                        path.display(),
+                                        w,
+                                        h,
+                                        TEMPLATE_W,
+                                        TEMPLATE_H
+                                    ));
+                                    continue;
+                                }
+                                entries.push((stem, w, h, luma.into_raw()));
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "cargo:warning=模板图片解码失败（{}）：{}",
+                                    path.display(),
+                                    e
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -45,20 +72,35 @@ fn main() {
         }
     }
 
+    if !size_errors.is_empty() {
+        panic!(
+            "模板尺寸校验失败：以下文件不是 {}x{}\n{}",
+            TEMPLATE_W,
+            TEMPLATE_H,
+            size_errors.join("\n")
+        );
+    }
+
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut code = String::from(
         "// 由 build.rs 自动生成，请勿手改\n\n\
-         /// 编译时嵌入的枪械模板：(名称无后缀, PNG 字节)\n\
-         pub const TEMPLATE_FILES: &[(&str, &[u8])] = &[\n",
+         /// 编译时嵌入的枪械模板：(名称无后缀, 宽, 高, 灰度原始字节)\n\
+         pub const TEMPLATE_FILES: &[(&str, u32, u32, &[u8])] = &[\n",
     );
 
-    for (stem, filename) in &entries {
-        // include_bytes! 路径相对于 CARGO_MANIFEST_DIR 的写法
+    for (stem, w, h, gray_raw) in &entries {
+        let bytes = gray_raw
+            .iter()
+            .map(|b| b.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         code.push_str(&format!(
-            "    (r#\"{}\"#, include_bytes!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/gun_template/{}\"))),\n",
+            "    (r#\"{}\"#, {}, {}, &[{}]),\n",
             stem.replace('\\', "\\\\").replace('"', "\\\""),
-            filename.replace('\\', "\\\\").replace('"', "\\\"")
+            w,
+            h,
+            bytes
         ));
     }
 
@@ -72,9 +114,8 @@ fn main() {
     let png_path = Path::new(&manifest_dir).join("3mz_ds_ver.png");
     if png_path.exists() {
         if let Ok(img) = image::open(&png_path) {
-            const SIZES: &[u32] = &[16, 32, 48, 256]; // 资源管理器常用尺寸
             let mut frames = Vec::new();
-            for &size in SIZES {
+            for &size in ICON_SIZES {
                 let scaled = img.resize(size, size, image::imageops::FilterType::Lanczos3);
                 let rgba = scaled.to_rgba8();
                 let frame = image::codecs::ico::IcoFrame::as_png(

@@ -15,6 +15,8 @@ use fast_image_resize::images::Image;
 use fast_image_resize::{PixelType, ResizeOptions, Resizer};
 use std::num::NonZeroU32;
 
+use crate::shared_constants::detection_defaults;
+use crate::shared_constants::error_limits::ENEMY_DET_MAX_CONSECUTIVE_ERRORS;
 use crate::utils::console_redirect::log_error;
 
 /// 检测配置结构体
@@ -29,10 +31,10 @@ struct DetectionConfig {
 impl Default for DetectionConfig {
     fn default() -> Self {
         Self {
-            size: 320,      // 默认推理尺寸
-            conf_thres: 0.4,
-            iou_thres: 0.9,
-            classes: "0".to_string(),
+            size: detection_defaults::SIZE,      // 默认推理尺寸
+            conf_thres: detection_defaults::CONF_THRES,
+            iou_thres: detection_defaults::IOU_THRES,
+            classes: detection_defaults::CLASSES.to_string(),
         }
     }
 }
@@ -328,7 +330,6 @@ impl DetectorThread {
             let mut detector = detector;
             let mut last_version: u64 = 0;
             let mut consecutive_errors = 0;
-            const MAX_CONSECUTIVE_ERRORS: u32 = 10;
             
             while !stop_flag_clone.load(Ordering::SeqCst) {
                 // 1. 先检查版本号，避免不必要的锁和克隆
@@ -342,7 +343,7 @@ impl DetectorThread {
                             Err(e) => {
                                 log_error(&format!("检测线程 - 获取缓冲区锁失败: {:?}", e));
                                 consecutive_errors += 1;
-                                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                if consecutive_errors >= ENEMY_DET_MAX_CONSECUTIVE_ERRORS {
                                     error_flag_clone.store(true, Ordering::SeqCst);
                                     break;
                                 }
@@ -372,7 +373,7 @@ impl DetectorThread {
                                 Err(e) => {
                                     log_error(&format!("检测线程 - 设置结果失败: {:?}", e));
                                     consecutive_errors += 1;
-                                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                                    if consecutive_errors >= ENEMY_DET_MAX_CONSECUTIVE_ERRORS {
                                         error_flag_clone.store(true, Ordering::SeqCst);
                                         break;
                                     }
@@ -382,8 +383,8 @@ impl DetectorThread {
                         Err(e) => {
                             log_error(&format!("推理失败: {:?}", e));
                             consecutive_errors += 1;
-                            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                                log_error(&format!("连续推理失败超过{}次，设置错误标志", MAX_CONSECUTIVE_ERRORS));
+                            if consecutive_errors >= ENEMY_DET_MAX_CONSECUTIVE_ERRORS {
+                                log_error(&format!("连续推理失败超过{}次，设置错误标志", ENEMY_DET_MAX_CONSECUTIVE_ERRORS));
                                 error_flag_clone.store(true, Ordering::SeqCst);
                                 break;
                             }

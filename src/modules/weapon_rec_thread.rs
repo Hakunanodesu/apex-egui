@@ -1,5 +1,6 @@
-//! 枪械识别线程：从右下角 ROI 做 Canny 后与模板 bitmask 匹配，返回最相似模板名（无后缀）
+//! 枪械识别线程：从右下角 ROI 做 Sobel + SSIM 匹配，返回最相似模板名（无后缀）
 //! 模板图片在编译时通过 build.rs 嵌入二进制，无需运行时 gun_template 目录。
+//! 约束（非常重要）：模板文件被视为“最终特征图”，禁止再对模板做 Sobel/Canny/dilate/拉伸等二次处理。
 
 include!("../build/gun_templates.rs");
 
@@ -12,45 +13,47 @@ use anyhow::Result;
 use fast_image_resize as fir;
 use fast_image_resize::images::Image;
 use fast_image_resize::{PixelType, ResizeOptions, Resizer};
-use image::imageops::FilterType;
 use image::{GrayImage, ImageBuffer, Luma};
-use imageproc::edges::canny;
+use imageproc::gradients::sobel_gradients;
 use std::num::NonZeroU32;
 
+use crate::shared_constants::weapon_rec::{
+    EMPTY_HAND_SSIM_THRESHOLD, EMPTY_HAND_STR, TEMPLATE_H as WEAPON_TEMPLATE_H,
+    TEMPLATE_W as WEAPON_TEMPLATE_W,
+};
 use crate::utils::console_redirect::log_error;
 
-pub const TARGET_W: u32 = 159;
-pub const TARGET_H: u32 = 38;
-const CANNY_LOW: f32 = 20.0;
-const CANNY_HIGH: f32 = 60.0;
-const EDGE_THRESHOLD: u8 = 128;
-/// 所有武器模板相似度都低于此阈值时判定为空手
-const EMPTY_HAND_SIMILARITY_THRESHOLD: f32 = 0.5;
-const EMPTY_HAND_STR: &str = "empty";
+struct WeaponTemplate {
+    /// 模板名（通常为文件名无后缀）
+    name: String,
+    /// 模板最终特征图（由外部准备，通常就是 live 预览导出的 Sobel 图）
+    /// 注意：该图禁止在本模块内再次经过 Sobel/Canny/dilate/拉伸等处理。
+    feature: GrayImage,
+}
 
-/// 从编译时嵌入的 TEMPLATE_FILES 解码出 (文件名无后缀, 灰度图, 边缘像素数)
-fn load_embedded_templates() -> Vec<(String, GrayImage, u32)> {
+/// 从编译时嵌入的 TEMPLATE_FILES 解码出模板。
+/// 模板在编译期已转为灰度原始字节，这里直接还原 GrayImage，不做额外处理。
+fn load_embedded_templates() -> Vec<WeaponTemplate> {
     let mut out = Vec::new();
-    for (name, bytes) in TEMPLATE_FILES.iter() {
-        let img = match image::load_from_memory(bytes) {
-            Ok(i) => i,
-            Err(e) => {
-                log_error(&format!("解码嵌入模板 {} 失败: {}", name, e));
+    for (name, w, h, bytes) in TEMPLATE_FILES.iter() {
+        let luma = match GrayImage::from_raw(*w, *h, bytes.to_vec()) {
+            Some(img) => img,
+            None => {
+                log_error(&format!(
+                    "还原嵌入模板 {} 失败：尺寸 {}x{} 与字节长度 {} 不匹配",
+                    name,
+                    w,
+                    h,
+                    bytes.len()
+                ));
                 continue;
             }
         };
-        let luma = img.to_luma8();
-        let (w, h) = (luma.width(), luma.height());
-        let resized = if w == TARGET_W && h == TARGET_H {
-            luma
-        } else {
-            image::imageops::resize(&luma, TARGET_W, TARGET_H, FilterType::Nearest)
-        };
-        let edge_count = resized
-            .pixels()
-            .filter(|p| p[0] >= EDGE_THRESHOLD)
-            .count() as u32;
-        out.push((name.to_string(), resized, edge_count));
+
+        out.push(WeaponTemplate {
+            name: name.to_string(),
+            feature: luma,
+        });
     }
     out
 }
@@ -74,64 +77,116 @@ fn rgb_to_gray(rgb: &[u8], w: usize, h: usize) -> Option<GrayImage> {
     Some(buf)
 }
 
-/// 使用 fast_image_resize 最近邻缩放到 159×38
-fn resize_to_target(rgb: &[u8], src_w: usize, src_h: usize) -> Result<Vec<u8>> {
-    let src_width = NonZeroU32::new(src_w as u32).ok_or_else(|| anyhow::anyhow!("width 0"))?;
-    let src_height = NonZeroU32::new(src_h as u32).ok_or_else(|| anyhow::anyhow!("height 0"))?;
-    let _dst_width = NonZeroU32::new(TARGET_W).ok_or_else(|| anyhow::anyhow!("dst width 0"))?;
-    let _dst_height = NonZeroU32::new(TARGET_H).ok_or_else(|| anyhow::anyhow!("dst height 0"))?;
+/// 将任意尺寸的灰度图缩放到模板统一尺寸：
+/// - 下采样使用 Box（近似 INTER_AREA）
+/// - 上采样使用 Bilinear（近似 INTER_LINEAR）
+fn resize_gray_to_target(src: &GrayImage) -> GrayImage {
+    let (w, h) = (src.width(), src.height());
+    if w == WEAPON_TEMPLATE_W && h == WEAPON_TEMPLATE_H {
+        return src.clone();
+    }
+    let src_width = NonZeroU32::new(w).unwrap();
+    let src_height = NonZeroU32::new(h).unwrap();
 
-    let src_image = Image::from_vec_u8(src_width.get(), src_height.get(), rgb.to_vec(), PixelType::U8x3)
-        .map_err(|e| anyhow::anyhow!("from_vec_u8: {:?}", e))?;
-    let mut dst_image = Image::new(TARGET_W, TARGET_H, PixelType::U8x3);
+    let src_image = Image::from_vec_u8(
+        src_width.get(),
+        src_height.get(),
+        src.as_raw().to_vec(),
+        PixelType::U8,
+    )
+    .expect("valid gray image buffer");
+    let mut dst_image = Image::new(WEAPON_TEMPLATE_W, WEAPON_TEMPLATE_H, PixelType::U8);
+
+    let downsample = w > WEAPON_TEMPLATE_W || h > WEAPON_TEMPLATE_H;
+    let alg = if downsample {
+        fir::ResizeAlg::Convolution(fir::FilterType::Box)
+    } else {
+        fir::ResizeAlg::Convolution(fir::FilterType::Bilinear)
+    };
 
     let mut resizer = Resizer::new();
-    let options = ResizeOptions::new().resize_alg(fir::ResizeAlg::Nearest);
+    let options = ResizeOptions::new().resize_alg(alg);
     resizer
         .resize(&src_image, &mut dst_image, &options)
-        .map_err(|e| anyhow::anyhow!("resize: {:?}", e))?;
+        .expect("resize ok");
 
-    Ok(dst_image.buffer().to_vec())
+    GrayImage::from_raw(WEAPON_TEMPLATE_W, WEAPON_TEMPLATE_H, dst_image.buffer().to_vec())
+        .expect("size matches weapon template size")
 }
 
-/// ROI 灰度图 min-max 线性拉伸到 0–255，提升亮场景下的边缘对比度
-fn linear_stretch_contrast(gray: &GrayImage) -> GrayImage {
-    let (min_val, max_val) = gray
-        .pixels()
-        .fold((255u8, 0u8), |(min_v, max_v), p| (min_v.min(p[0]), max_v.max(p[0])));
-    if max_val <= min_val {
-        return gray.clone();
+/// 计算 Sobel 梯度幅值图并归一化到 0-255
+fn sobel_magnitude(gray: &GrayImage) -> GrayImage {
+    let (w, h) = (gray.width(), gray.height());
+    if w == 0 || h == 0 {
+        return GrayImage::new(w, h);
     }
-    let range = (max_val - min_val) as f32;
-    let mut out = GrayImage::new(gray.width(), gray.height());
-    for y in 0..gray.height() {
-        for x in 0..gray.width() {
-            let v = gray.get_pixel(x, y)[0];
-            let stretched = ((v - min_val) as f32 / range * 255.0).round().clamp(0.0, 255.0) as u8;
-            out.put_pixel(x, y, Luma([stretched]));
-        }
+
+    let grad = sobel_gradients(gray); // u16
+    let mut max_v = 0u16;
+    for p in grad.pixels() {
+        max_v = max_v.max(p[0]);
+    }
+    if max_v == 0 {
+        return GrayImage::new(w, h);
+    }
+
+    let mut out = GrayImage::new(w, h);
+    for (x, y, p) in grad.enumerate_pixels() {
+        let v = p[0] as f32 / max_v as f32;
+        out.put_pixel(x, y, Luma([(v * 255.0).clamp(0.0, 255.0) as u8]));
     }
     out
 }
 
-/// 计算相似度：匹配的边缘像素数 / 模板边缘像素总数
-fn similarity(live: &GrayImage, template: &GrayImage, template_edge_count: u32) -> f32 {
-    if template_edge_count == 0 {
+/// 全局 SSIM，相似度范围 [0, 1]
+fn ssim(a: &GrayImage, b: &GrayImage) -> f32 {
+    let (wa, ha) = (a.width(), a.height());
+    let (wb, hb) = (b.width(), b.height());
+    if wa != wb || ha != hb || wa == 0 || ha == 0 {
         return 0.0;
     }
-    let mut match_count = 0u32;
-    for y in 0..TARGET_H {
-        for x in 0..TARGET_W {
-            let tx = x as u32;
-            let ty = y as u32;
-            let t_val = template.get_pixel(tx, ty)[0];
-            let l_val = live.get_pixel(tx, ty)[0];
-            if t_val >= EDGE_THRESHOLD && l_val >= EDGE_THRESHOLD {
-                match_count += 1;
-            }
+
+    let n = (wa as f32) * (ha as f32);
+    if n <= 0.0 {
+        return 0.0;
+    }
+
+    let mut sum_a = 0.0f32;
+    let mut sum_b = 0.0f32;
+    let mut sum_a2 = 0.0f32;
+    let mut sum_b2 = 0.0f32;
+    let mut sum_ab = 0.0f32;
+    for y in 0..ha {
+        for x in 0..wa {
+            let va = a.get_pixel(x, y)[0] as f32;
+            let vb = b.get_pixel(x, y)[0] as f32;
+            sum_a += va;
+            sum_b += vb;
+            sum_a2 += va * va;
+            sum_b2 += vb * vb;
+            sum_ab += va * vb;
         }
     }
-    match_count as f32 / template_edge_count as f32
+
+    let mean_a = sum_a / n;
+    let mean_b = sum_b / n;
+    let var_a = (sum_a2 / n) - mean_a * mean_a;
+    let var_b = (sum_b2 / n) - mean_b * mean_b;
+    let cov_ab = (sum_ab / n) - mean_a * mean_b;
+
+    let k1 = 0.01f32;
+    let k2 = 0.03f32;
+    let l = 255.0f32;
+    let c1 = (k1 * l) * (k1 * l);
+    let c2 = (k2 * l) * (k2 * l);
+    let num = (2.0 * mean_a * mean_b + c1) * (2.0 * cov_ab + c2);
+    let den = (mean_a * mean_a + mean_b * mean_b + c1) * (var_a + var_b + c2);
+
+    if den.abs() <= f32::EPSILON {
+        0.0
+    } else {
+        (num / den).clamp(0.0, 1.0)
+    }
 }
 
 pub struct WeaponRecThread {
@@ -141,7 +196,7 @@ pub struct WeaponRecThread {
     match_latency_ms: Arc<Mutex<f32>>,
     /// 最近一帧与最佳模板的相似度 [0, 1]
     best_similarity: Arc<Mutex<f32>>,
-    /// 最近一帧的 live canny 图（右下角 ROI 做 Canny 后的灰度），用于预览。尺寸 TARGET_W×TARGET_H。
+    /// 最近一帧的特征图（当前为 Sobel 梯度幅值），用于预览。
     canny_pixels: Arc<Mutex<Option<Vec<u8>>>>,
     error_flag: Arc<AtomicBool>,
 }
@@ -205,30 +260,26 @@ impl WeaponRecThread {
                 };
                 last_version = current_version;
 
-                let resized = match resize_to_target(&roi_copy, crop_w, crop_h) {
-                    Ok(r) => r,
-                    Err(e) => {
-                        log_error(&format!("武器 ROI 缩放失败: {}", e));
-                        continue;
-                    }
-                };
-                let gray = match rgb_to_gray(&resized, TARGET_W as usize, TARGET_H as usize) {
+                // 1) 将 ROI RGB 转灰度
+                let gray_raw = match rgb_to_gray(&roi_copy, crop_w, crop_h) {
                     Some(g) => g,
                     None => continue,
                 };
-                let gray = linear_stretch_contrast(&gray);
-                let live_canny = canny(&gray, CANNY_LOW, CANNY_HIGH);
+                // 2) 缩放到统一尺寸（下采样 Box，上采样 Bilinear）
+                let gray = resize_gray_to_target(&gray_raw);
+                // 3) Sobel 梯度幅值图
+                let live_sobel = sobel_magnitude(&gray);
                 if let Ok(mut guard) = canny_pixels_clone.lock() {
-                    *guard = Some(live_canny.as_raw().to_vec());
+                    *guard = Some(live_sobel.as_raw().to_vec());
                 }
 
                 let (best_name, best_sim) = templates
                     .iter()
-                    .map(|t| (t.0.clone(), similarity(&live_canny, &t.1, t.2)))
+                    .map(|t| (t.name.clone(), ssim(&live_sobel, &t.feature)))
                     .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
                     .unwrap_or((String::new(), 0.0));
 
-                let result_str = if best_sim < EMPTY_HAND_SIMILARITY_THRESHOLD {
+                let result_str = if best_sim < EMPTY_HAND_SSIM_THRESHOLD {
                     EMPTY_HAND_STR.to_string()
                 } else {
                     best_name
@@ -262,7 +313,7 @@ impl WeaponRecThread {
         self.result.clone()
     }
 
-    /// 最近一帧的 live canny 图像素（TARGET_W×TARGET_H 灰度），用于推理预览窗口。
+    /// 最近一帧的 live Sobel 特征图像素（模板统一尺寸灰度），用于推理预览窗口。
     pub fn canny_pixels(&self) -> Arc<Mutex<Option<Vec<u8>>>> {
         self.canny_pixels.clone()
     }

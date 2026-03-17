@@ -1,4 +1,5 @@
 use std::fs;
+use crate::shared_constants::paths::{CONFIGS_DIR, CURRENT_CONFIG_FILE};
 
 /// 当前配置信息
 #[derive(serde::Deserialize, serde::Serialize)]
@@ -107,7 +108,7 @@ pub struct ConfigFile {
 
 /// 读取 configs/.current 文件，返回当前配置和模型
 pub fn read_current_config() -> Option<(String, String)> {
-    if let Ok(content) = fs::read_to_string("configs/.current") {
+    if let Ok(content) = fs::read_to_string(CURRENT_CONFIG_FILE) {
         if let Ok(config) = serde_json::from_str::<CurrentConfig>(&content) {
             return Some((config.current_config, config.current_model));
         }
@@ -122,13 +123,13 @@ pub fn save_current_config(config: &str, model: &str) -> Result<(), Box<dyn std:
         current_model: model.to_string(),
     };
     let content = serde_json::to_string_pretty(&current)?;
-    fs::write("configs/.current", content)?;
+    fs::write(CURRENT_CONFIG_FILE, content)?;
     Ok(())
 }
 
 /// 从配置文件加载配置
 pub fn load_config_file(config_name: &str) -> Result<ConfigFile, Box<dyn std::error::Error>> {
-    let file_path = format!("configs/{}.json", config_name);
+    let file_path = format!("{}/{}.json", CONFIGS_DIR, config_name);
     let content = fs::read_to_string(&file_path)?;
     let config: ConfigFile = serde_json::from_str(&content)?;
     Ok(config)
@@ -136,7 +137,7 @@ pub fn load_config_file(config_name: &str) -> Result<ConfigFile, Box<dyn std::er
 
 /// 保存配置到文件
 pub fn save_config_file(config_name: &str, config: &ConfigFile) -> Result<(), Box<dyn std::error::Error>> {
-    let file_path = format!("configs/{}.json", config_name);
+    let file_path = format!("{}/{}.json", CONFIGS_DIR, config_name);
     let content = serde_json::to_string_pretty(config)?;
     fs::write(&file_path, content)?;
     Ok(())

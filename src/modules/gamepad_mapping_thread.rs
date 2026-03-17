@@ -9,14 +9,9 @@ use std::{
 };
 use vigem_client::{Client, Xbox360Wired, XGamepad};
 use crate::modules::enemy_det_thread::Detection;
+use crate::shared_constants::error_limits::GAMEPAD_MAPPING_MAX_CONSECUTIVE_ERRORS;
+pub use crate::shared_constants::RAPID_FIRE_WEAPONS;
 use crate::utils::console_redirect::log_error;
-
-/// 连点白名单：当枪械识别结果为列表中的武器时始终连点。
-/// 填写 gun_template 下模板文件名（无后缀），例如：
-/// `&["r99", "re45", "car", "301", "转换者"]`
-pub const RAPID_FIRE_WEAPONS: &[&str] = &[
-    "30_30", "mastiff", "single_p2020", "peacekeeper", "hemlok", "kraber", "triple_take", "sentinel", "wingman", "longbow", "g7",
-];
 
 // 新增：当右扳机按下时，基于检测结果对右摇杆进行修正
 fn apply_right_trigger_adjustment(
@@ -134,7 +129,6 @@ impl ConMapper {
             // println!("手柄映射线程已启动，使用0号虚拟手柄");
 
             let mut consecutive_errors = 0;
-            const MAX_CONSECUTIVE_ERRORS: u32 = 50;
             // 连点模式：根据当前输出状态反转扳机状态
             let mut rapid_high: bool = false;
             // 松手开火：记录上一帧右扳机是否按下
@@ -148,7 +142,7 @@ impl ConMapper {
                     Err(e) => {
                         log_error(&format!("手柄映射 - 获取手柄状态失败: {:?}", e));
                         consecutive_errors += 1;
-                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        if consecutive_errors >= GAMEPAD_MAPPING_MAX_CONSECUTIVE_ERRORS {
                             error_flag_clone.store(true, Ordering::SeqCst);
                             break;
                         }
@@ -274,7 +268,7 @@ impl ConMapper {
                         Err(e) => {
                             log_error(&format!("手柄映射 - 获取检测结果失败: {:?}", e));
                             consecutive_errors += 1;
-                            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                            if consecutive_errors >= GAMEPAD_MAPPING_MAX_CONSECUTIVE_ERRORS {
                                 error_flag_clone.store(true, Ordering::SeqCst);
                                 break;
                             }
@@ -287,7 +281,7 @@ impl ConMapper {
                     if let Err(e) = vg.update(&mapped_state) {
                         log_error(&format!("手柄映射 - ViGEm更新状态失败: {:?}", e));
                         consecutive_errors += 1;
-                        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        if consecutive_errors >= GAMEPAD_MAPPING_MAX_CONSECUTIVE_ERRORS {
                             error_flag_clone.store(true, Ordering::SeqCst);
                             break;
                         }

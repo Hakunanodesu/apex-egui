@@ -1,7 +1,6 @@
 //! 启动时检查 GitHub Release 是否有新版本（后台请求，不阻塞 UI）。
 
-const RELEASES_URL: &str = "https://api.github.com/repos/Hakunanodesu/apex-egui/releases";
-const REQUEST_TIMEOUT_MS: u64 = 5000;
+use crate::shared_constants::update_check::{RELEASES_URL, REQUEST_TIMEOUT_MS};
 
 /// 检测到有新版本时携带的信息
 #[derive(Clone, Debug)]

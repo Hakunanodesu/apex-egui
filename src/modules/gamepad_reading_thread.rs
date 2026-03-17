@@ -14,6 +14,7 @@ use sdl2::{
 };
 use vigem_client::{XGamepad, XButtons};
 
+use crate::shared_constants::error_limits::GAMEPAD_READING_MAX_CONSECUTIVE_ERRORS;
 use crate::utils::console_redirect::log_error;
 use crate::utils::ConMapping;
 
@@ -271,7 +272,6 @@ impl ConReader {
             }
 
             let mut consecutive_errors = 0;
-            const MAX_CONSECUTIVE_ERRORS: u32 = 100; // 允许更多错误，因为手柄断开连接是常见的
             
             // 循环处理
             while !stop_clone.load(Ordering::SeqCst) {
@@ -313,8 +313,11 @@ impl ConReader {
                         Err(e) => {
                             log_error(&format!("手柄读取 - 获取状态锁失败: {:?}", e));
                             consecutive_errors += 1;
-                            if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                                log_error(&format!("手柄读取 - 连续错误超过{}次，设置错误标志", MAX_CONSECUTIVE_ERRORS));
+                            if consecutive_errors >= GAMEPAD_READING_MAX_CONSECUTIVE_ERRORS {
+                                log_error(&format!(
+                                    "手柄读取 - 连续错误超过{}次，设置错误标志",
+                                    GAMEPAD_READING_MAX_CONSECUTIVE_ERRORS
+                                ));
                                 error_flag_clone.store(true, Ordering::SeqCst);
                                 break;
                             }
