@@ -134,7 +134,7 @@ pub mod build {
 
 /// 连点白名单（与 gun_template 文件名无后缀保持一致）
 pub const RAPID_FIRE_WEAPONS: &[&str] = &[
-    "30_30",
+    "30-30",
     "mastiff",
     "p2020_single",
     "peacekeeper",
