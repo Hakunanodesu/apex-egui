@@ -1620,16 +1620,8 @@ impl eframe::App for MyApp {
                                     // 每行列宽（滚动区域内单独计算一次）
                                     let width = ui.available_width() / 3.0 - SPACING * 2.0;
 
-                                    // 特殊枪械行
-                                    let special_rows = [
-                                        "mastiff",
-                                        "peacekeeper",
-                                        "kraber",
-                                        "triple_take",
-                                        "sentinel",
-                                    ];
-
-                                    for name in special_rows {
+                                    // 特殊枪械行（与 RAPID_FIRE_WEAPONS 保持一致）
+                                    for name in RAPID_FIRE_WEAPONS.iter().copied() {
                                         ui.horizontal(|ui| {
                                             // 武器名
                                             ui.add_sized(
