@@ -11,7 +11,7 @@ mod modules;
 mod shared_constants;
 use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_height, load_config_file, save_config_file, save_current_config, ConfigFile, ConMapping, check_dir_exist};
 use modules::update_check::{check_github_update, UpdateCheckResult, UpdateInfo};
-use shared_constants::RAPID_FIRE_WEAPONS;
+use shared_constants::rapid_fire_weapons;
 use shared_constants::auth::LICENSE_CODE;
 use shared_constants::defaults;
 use shared_constants::ui::{
@@ -105,7 +105,7 @@ fn modal_blocker(ctx: &egui::Context) {
         });
 }
 
-/// Debug 模式下，获取 gun_template 目录下已有 *.png 的最大编号 + 1
+/// Debug 模式下，获取 gun_templates 目录下已有 *.png 的最大编号 + 1
 #[cfg(debug_assertions)]
 fn next_png_number_in_dir(dir: &Path) -> u32 {
     let mut max = 0u32;
@@ -856,7 +856,7 @@ impl eframe::App for MyApp {
             }
         }
 
-        // Debug：按 Backspace 保存当前帧武器识别 live 图（159×38）到当前工作目录 gun_template/编号.png
+        // Debug：按 Backspace 保存当前帧武器识别 live 图（159×38）到当前工作目录 gun_templates/编号.png
         #[cfg(debug_assertions)]
         {
             if ctx.input(|i| i.key_pressed(egui::Key::Backspace)) {
@@ -868,7 +868,7 @@ impl eframe::App for MyApp {
                             if pixels.len() == len {
                                 let dir = std::env::current_dir()
                                     .unwrap_or_else(|_| std::path::PathBuf::from("."))
-                                    .join("gun_template");
+                                    .join("gun_templates");
                                 if std::fs::create_dir_all(&dir).is_ok() {
                                     let n = next_png_number_in_dir(&dir);
                                     let path = dir.join(format!("{}.png", n));
@@ -1564,7 +1564,7 @@ impl eframe::App for MyApp {
                             if self.rapid_fire_mode_selected == "根据枪械自动切换" {
                                 inner.response.on_hover_ui(|ui| {
                                     ui.set_max_width(CHARACTER_WIDTH * 32.0);
-                                    ui.label(RAPID_FIRE_WEAPONS.join(", "));
+                                    ui.label(rapid_fire_weapons().join(", "));
                                 });
                             }
                         });
@@ -1620,8 +1620,8 @@ impl eframe::App for MyApp {
                                     // 每行列宽（滚动区域内单独计算一次）
                                     let width = ui.available_width() / 3.0 - SPACING * 2.0;
 
-                                    // 特殊枪械行（与 RAPID_FIRE_WEAPONS 保持一致）
-                                    for name in RAPID_FIRE_WEAPONS.iter().copied() {
+                                    // 特殊枪械行（与 gun_templates 文件名保持一致）
+                                    for name in rapid_fire_weapons().iter().map(String::as_str) {
                                         ui.horizontal(|ui| {
                                             // 武器名
                                             ui.add_sized(

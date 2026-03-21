@@ -1,4 +1,4 @@
-//! 编译时扫描 gun_template/*.png 并生成嵌入模块，供 weapon_rec_thread 使用。
+//! 编译时扫描 gun_templates/*.png 并生成嵌入模块，供 weapon_rec_thread 使用。
 //! 将 3mz_ds_ver.png 转为 ICO 并设为 exe 图标。
 
 use std::env;
@@ -14,7 +14,7 @@ use shared_constants::weapon_rec::{TEMPLATE_H, TEMPLATE_W};
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let template_dir = Path::new(&manifest_dir).join("gun_template");
+    let template_dir = Path::new(&manifest_dir).join("gun_templates");
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
     // 生成的模板表写到源码目录，方便用相对路径 include!，避免依赖编译期的 OUT_DIR 环境变量。
     let build_dir = Path::new(&manifest_dir).join("src").join("build");
@@ -68,7 +68,7 @@ fn main() {
                 }
             }
         } else {
-            eprintln!("cargo:warning=gun_template 目录读取失败，将不嵌入模板图片");
+            eprintln!("cargo:warning=gun_templates 目录读取失败，将不嵌入模板图片");
         }
     }
 
@@ -107,7 +107,7 @@ fn main() {
     code.push_str("];\n");
 
     fs::write(&src_out_path, code).expect("写入 gun_templates.rs 失败");
-    println!("cargo:rerun-if-changed=gun_template");
+    println!("cargo:rerun-if-changed=gun_templates");
     println!("cargo:rerun-if-changed=3mz_ds_ver.png");
 
     // 将 3mz_ds_ver.png 转为多尺寸 ICO 并嵌入为 exe 图标（资源管理器/任务栏）

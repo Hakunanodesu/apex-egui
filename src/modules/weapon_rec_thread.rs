@@ -1,5 +1,5 @@
 //! 枪械识别线程：从右下角 ROI 做 Sobel + SSIM 匹配，返回最相似模板名（无后缀）
-//! 模板图片在编译时通过 build.rs 嵌入二进制，无需运行时 gun_template 目录。
+//! 模板图片在编译时通过 build.rs 嵌入二进制，无需运行时 gun_templates 目录。
 //! 约束（非常重要）：模板文件被视为“最终特征图”，禁止再对模板做 Sobel/Canny/dilate/拉伸等二次处理。
 
 include!("../build/gun_templates.rs");

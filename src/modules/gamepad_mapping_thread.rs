@@ -11,7 +11,6 @@ use vigem_client::{Client, Xbox360Wired, XGamepad};
 use crate::modules::enemy_det_thread::Detection;
 use crate::shared_constants::error_limits::GAMEPAD_MAPPING_MAX_CONSECUTIVE_ERRORS;
 use crate::shared_constants::trigger_timing::TRIGGER_TIMING_UNIT_MS;
-pub use crate::shared_constants::RAPID_FIRE_WEAPONS;
 use crate::utils::console_redirect::log_error;
 
 // 新增：当右扳机按下时，基于检测结果对右摇杆进行修正
