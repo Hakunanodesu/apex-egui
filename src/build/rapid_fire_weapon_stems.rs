@@ -4,7 +4,6 @@
 pub const RAPID_FIRE_WEAPON_STEMS: &[&str] = &[
     r#"30-30"#,
     r#"g7"#,
-    r#"hemlok"#,
     r#"kraber"#,
     r#"longbow"#,
     r#"mastiff"#,
