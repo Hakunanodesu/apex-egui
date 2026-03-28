@@ -41,11 +41,8 @@ pub mod trigger_timing {
 
 /// 吸附强度曲线相关常量
 pub mod aim_assist {
-    /// 递增阶段曲线类型：
-    /// - "linear": 使用 t 做线性插值
-    /// - "ease-in": 使用 t^2 做插值（端点保持原始强度值）
-    /// - "ease-in-out": 使用缓入缓出进度 y=3t^2-2t^3 做插值（端点保持原始强度值）
-    pub const INNER_RAMP_CURVE: &str = "ease-in-out";
+    /// 右摇杆辅助修正量 EMA 系数 α（`smoothed = α*raw + (1-α)*smoothed_prev`，两轴共用）
+    pub const ASSIST_OUTPUT_EMA_ALPHA: f32 = 0.1;
 }
 
 /// UI 外观与交互文案相关常量
@@ -99,6 +96,8 @@ pub mod defaults {
     pub const VERTICAL_STRENGTH_COEFFICIENT: f32 = 0.4;
     pub const AA_ACTIVATE_MODE: &str = "仅开火";
     pub const RAPID_FIRE_MODE: &str = "不启用连点";
+    /// 右摇杆辅助输出 EMA 默认 α（与 `aim_assist::ASSIST_OUTPUT_EMA_ALPHA` 一致）
+    pub const ASSIST_OUTPUT_EMA_ALPHA: f32 = super::aim_assist::ASSIST_OUTPUT_EMA_ALPHA;
 }
 
 /// 鉴权相关常量

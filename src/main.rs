@@ -12,7 +12,6 @@ mod shared_constants;
 use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_height, load_config_file, save_config_file, save_current_config, ConfigFile, ConMapping, check_dir_exist};
 use modules::update_check::{check_github_update, UpdateCheckResult, UpdateInfo};
 use shared_constants::RAPID_FIRE_WEAPON_STEMS;
-use shared_constants::aim_assist::INNER_RAMP_CURVE;
 use shared_constants::auth::LICENSE_CODE;
 use shared_constants::defaults;
 use shared_constants::ui::{
@@ -49,7 +48,7 @@ fn main() -> Result<(), eframe::Error> {
     let mut viewport = egui::ViewportBuilder::default()
         .with_inner_size([
             CHARACTER_WIDTH * 32.0,
-            ROW_HEIGHT * 13.0 + ROW_HEIGHT / 3.0 * 7.0 + SPACING * 21.0
+            ROW_HEIGHT * 13.0 + ROW_HEIGHT / 3.0 * 8.0 + SPACING * 22.0
         ])
         .with_resizable(false)
         .with_maximize_button(false); // 禁用最大化按钮
@@ -188,8 +187,6 @@ struct MyApp {
     rapid_fire_mode: Arc<AtomicU8>, // 连点模式（跨线程共享）：0=关闭, 1=始终连点, 2=半按扳机连点
     rapid_fire_mode_selected: String,
     rapid_fire_mode_items: Vec<String>,
-    inner_ramp_mode: Arc<AtomicU8>, // 内圈递增曲线（跨线程共享）：0=linear,1=ease-in,2=ease-in-out
-    inner_ramp_mode_selected: String,
 
     // 吸附方式选择
     aa_activate_mode_selected: String,
@@ -212,6 +209,8 @@ struct MyApp {
     // 其他吸附参数
     start_strength: f32, // 起始吸附强度
     hipfire_strength_factor: f32, // 腰射吸附系数
+    /// 右摇杆辅助输出 EMA 实际 α（0~1）；界面输入为 10 倍缩放
+    assist_output_ema_alpha: f32,
     vertical_strength_factor: f32, // 垂直吸附系数
     aim_height_factor: f32, // 瞄准高度系数
 
@@ -246,6 +245,7 @@ struct MyApp {
     inner_str: Arc<Mutex<String>>,
     init_str: Arc<Mutex<String>>,
     hipfire: Arc<Mutex<String>>,
+    assist_ema_alpha_str: Arc<Mutex<String>>,
     vertical_str: Arc<Mutex<String>>,
     aim_height: Arc<Mutex<String>>,
     
@@ -289,7 +289,7 @@ struct MyApp {
     debug_btn_b: String,
     // 第一段曲线预览采样缓存（x, y）
     curve_preview_points_cache: Vec<(f32, f32)>,
-    curve_preview_cache_key: Option<(f32, f32, f32, u8)>, // (outer_diameter, start_strength, inner_strength, mode)
+    curve_preview_cache_key: Option<(f32, f32, f32)>, // (outer_diameter, start_strength, inner_strength)
 }
 
 impl Default for MyApp {
@@ -318,13 +318,13 @@ impl Default for MyApp {
         // 初始化参数共享结构
         let aim_enable = Arc::new(AtomicBool::new(false));
         let rapid_fire_mode = Arc::new(AtomicU8::new(0));
-        let inner_ramp_mode = Arc::new(AtomicU8::new(Self::inner_ramp_mode_to_u8(INNER_RAMP_CURVE)));
         let outer_size = Arc::new(Mutex::new(String::new()));
         let inner_size = Arc::new(Mutex::new(String::new()));
         let outer_str = Arc::new(Mutex::new(String::new()));
         let inner_str = Arc::new(Mutex::new(String::new()));
         let init_str = Arc::new(Mutex::new(String::new()));
         let hipfire = Arc::new(Mutex::new(String::new()));
+        let assist_ema_alpha_str = Arc::new(Mutex::new(String::new()));
         let vertical_str = Arc::new(Mutex::new(String::new()));
         let aim_height = Arc::new(Mutex::new(String::new()));
         
@@ -338,10 +338,10 @@ impl Default for MyApp {
             inner_str.clone(),
             init_str.clone(),
             hipfire.clone(),
+            assist_ema_alpha_str.clone(),
             vertical_str.clone(),
             aim_height.clone(),
             rapid_fire_mode.clone(),
-            inner_ramp_mode.clone(),
         );
         
         let mut app = Self {
@@ -356,8 +356,6 @@ impl Default for MyApp {
             rapid_fire_mode,
             rapid_fire_mode_selected: defaults::RAPID_FIRE_MODE.to_string(),
             rapid_fire_mode_items: RAPID_FIRE_MODE_ITEMS.iter().map(|s| (*s).to_string()).collect(),
-            inner_ramp_mode,
-            inner_ramp_mode_selected: INNER_RAMP_CURVE.to_string(),
             aa_activate_mode_selected: String::new(),
             aa_activate_mode_items: AA_ACTIVATE_MODE_ITEMS.iter().map(|s| (*s).to_string()).collect(),
             special_weapons_aim_and_fire: Vec::new(),
@@ -370,6 +368,7 @@ impl Default for MyApp {
             inner_strength: 0.0,
             start_strength: 0.0,
             hipfire_strength_factor: 0.0,
+            assist_output_ema_alpha: defaults::ASSIST_OUTPUT_EMA_ALPHA,
             vertical_strength_factor: 0.0,
             aim_height_factor: 0.0,
             license_key: String::new(),
@@ -390,6 +389,7 @@ impl Default for MyApp {
             inner_str,
             init_str,
             hipfire,
+            assist_ema_alpha_str,
             vertical_str,
             aim_height,
             con_exist: enumerate_controllers(),
@@ -449,20 +449,6 @@ impl Default for MyApp {
 }
 
 impl MyApp {
-    fn eval_inner_ramp_progress(&self, t: f32) -> f32 {
-        let t = t.clamp(0.0, 1.0);
-        let mode = self.inner_ramp_mode.load(Ordering::Relaxed);
-        if mode == 0 {
-            t
-        } else if mode == 1 {
-            t * t
-        } else if mode == 2 {
-            3.0 * t * t - 2.0 * t * t * t
-        } else {
-            t
-        }
-    }
-
     fn ensure_curve_preview_points_cache(&mut self) {
         if self.outer_diameter <= 0.0 {
             self.curve_preview_points_cache.clear();
@@ -474,7 +460,6 @@ impl MyApp {
             self.outer_diameter,
             self.start_strength,
             self.inner_strength,
-            self.inner_ramp_mode.load(Ordering::Relaxed),
         );
         if self.curve_preview_cache_key == Some(key) {
             return;
@@ -485,7 +470,7 @@ impl MyApp {
         let mut points = Vec::with_capacity(point_count);
         for i in 0..point_count {
             let t = i as f32 / (point_count as f32 - 1.0);
-            let progress = self.eval_inner_ramp_progress(t);
+            let progress = t.clamp(0.0, 1.0);
             let y = self.start_strength * (1.0 - progress) + self.inner_strength * progress;
             points.push((x_end * t, y));
         }
@@ -544,13 +529,6 @@ impl MyApp {
         self.aa_activate_mode_selected = config.aa_activate_mode.clone();
         self.special_weapons_aim_and_fire = config.special_weapons_aim_and_fire.clone();
         self.special_weapons_release_to_fire = config.special_weapons_release_to_fire.clone();
-        self.inner_ramp_mode_selected = if config.inner_ramp_curve.is_empty() {
-            INNER_RAMP_CURVE.to_string()
-        } else {
-            config.inner_ramp_curve.clone()
-        };
-        self.inner_ramp_mode
-            .store(Self::inner_ramp_mode_to_u8(&self.inner_ramp_mode_selected), Ordering::Relaxed);
         self.curve_preview_cache_key = None;
         self.rapid_fire_mode_selected = if config.rapid_fire_mode.is_empty() {
             "不启用连点".to_string()
@@ -564,6 +542,7 @@ impl MyApp {
         self.inner_strength = config.assist_curve.inner_strength;
         self.start_strength = config.assist_curve.deadzone;
         self.hipfire_strength_factor = config.assist_curve.hipfire;
+        self.assist_output_ema_alpha = config.assist_curve.assist_output_ema_alpha;
         self.vertical_strength_factor = config.vertical_strength_coefficient;
         self.aim_height_factor = config.aim_height_coefficient;
         // 许可证：仅当配置中的许可证正确时才显示在输入框，否则留空
@@ -652,13 +631,13 @@ impl MyApp {
                 inner_strength: self.inner_strength,
                 outer_diameter: self.outer_diameter,
                 outer_strength: self.outer_strength,
+                assist_output_ema_alpha: self.assist_output_ema_alpha,
             },
             aa_activate_mode: self.aa_activate_mode_selected.clone(),
             use_controller: self.use_controller,
             vertical_strength_coefficient: self.vertical_strength_factor,
             con_mapping: Some(self.debug_to_con_mapping()),
             rapid_fire_mode: self.rapid_fire_mode_selected.clone(),
-            inner_ramp_curve: self.inner_ramp_mode_selected.clone(),
             license_code: self.license_key.clone(),
             special_weapons_aim_and_fire: self.special_weapons_aim_and_fire.clone(),
             special_weapons_release_to_fire: self.special_weapons_release_to_fire.clone(),
@@ -706,6 +685,12 @@ impl MyApp {
         }
         if let Ok(mut hipfire) = self.hipfire.lock() {
             *hipfire = self.hipfire_strength_factor.to_string();
+        }
+        if let Ok(mut ema_a) = self.assist_ema_alpha_str.lock() {
+            *ema_a = format!(
+                "{:.2}",
+                self.assist_output_ema_alpha.clamp(0.0, 1.0)
+            );
         }
         if let Ok(mut vertical_str) = self.vertical_str.lock() {
             *vertical_str = format!("{:.2}", self.vertical_strength_factor);
@@ -813,13 +798,13 @@ impl MyApp {
                 inner_strength: defaults::INNER_STRENGTH,
                 outer_diameter: defaults::BASE_OUTER_DIAMETER * scale,
                 outer_strength: defaults::OUTER_STRENGTH,
+                assist_output_ema_alpha: defaults::ASSIST_OUTPUT_EMA_ALPHA,
             },
             aa_activate_mode: defaults::AA_ACTIVATE_MODE.to_string(),
             use_controller: false,
             vertical_strength_coefficient: defaults::VERTICAL_STRENGTH_COEFFICIENT,
             con_mapping: Some(ConMapping::default()),
             rapid_fire_mode: defaults::RAPID_FIRE_MODE.to_string(),
-            inner_ramp_curve: INNER_RAMP_CURVE.to_string(),
             license_code: String::new(),
             special_weapons_aim_and_fire: Vec::new(),
             special_weapons_release_to_fire: Vec::new(),
@@ -836,26 +821,6 @@ impl MyApp {
         }
     }
 
-    fn inner_ramp_mode_to_u8(mode: &str) -> u8 {
-        match mode {
-            "linear" => 0,
-            "ease-in" => 1,
-            "ease-in-out" => 2,
-            _ => 2,
-        }
-    }
-
-    fn set_inner_ramp_mode(&mut self, mode: &str) {
-        if self.inner_ramp_mode_selected == mode {
-            return;
-        }
-        self.inner_ramp_mode_selected = mode.to_string();
-        self.inner_ramp_mode
-            .store(Self::inner_ramp_mode_to_u8(mode), Ordering::Relaxed);
-        self.curve_preview_cache_key = None;
-        self.mark_config_changed();
-        self.save_config();
-    }
 }
 
 impl eframe::App for MyApp {
@@ -1418,7 +1383,7 @@ impl eframe::App for MyApp {
                                     if self.outer_diameter > 0.0 {
                                         self.ensure_curve_preview_points_cache();
 
-                                        // 第一段曲线：按 INNER_RAMP_CURVE 采样后折线逼近 - 红色
+                                        // 第一段曲线：内圈线性递增段折线逼近 - 红色
                                         let line1_color = RED;
                                         let line1_stroke = egui::Stroke::new(2.0, line1_color);
 
@@ -1452,25 +1417,29 @@ impl eframe::App for MyApp {
                             ui.horizontal(|ui| {
                                 ui.add_sized(
                                     egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
-                                    egui::Label::new("曲线模式")
-                                );
+                                    egui::Label::new("平滑系数"),
+                                )
+                                .on_hover_text("越低越平滑");
 
-                                egui::ComboBox::from_id_source("inner_ramp_curve")
-                                    .width(CHARACTER_WIDTH * 10.0)
-                                    .selected_text(&self.inner_ramp_mode_selected)
-                                    .show_ui(ui, |ui| {
-                                        for mode in ["linear", "ease-in", "ease-in-out"] {
-                                            if ui
-                                                .selectable_label(
-                                                    self.inner_ramp_mode_selected == mode,
-                                                    mode,
-                                                )
-                                                .clicked()
-                                            {
-                                                self.set_inner_ramp_mode(mode);
-                                            }
+                                if ui.add_sized(
+                                    egui::Vec2::new(CHARACTER_WIDTH * 4.0, ROW_HEIGHT),
+                                    egui::DragValue::from_get_set(|opt: Option<f64>| {
+                                        if let Some(ui_val) = opt {
+                                            let ui_round = (ui_val * 100.0).round() / 100.0;
+                                            self.assist_output_ema_alpha =
+                                                ((ui_round / 10.0) as f32).clamp(0.0, 1.0);
                                         }
-                                    });
+                                        let d = self.assist_output_ema_alpha as f64 * 10.0;
+                                        (d * 100.0).round() / 100.0
+                                    })
+                                    .clamp_range(0.0..=10.0)
+                                    .speed(0.01)
+                                    .fixed_decimals(2),
+                                ).changed() {
+                                    self.mark_config_changed();
+                                    self.save_config();
+                                    self.sync_params_to_manager();
+                                }
                             });
 
                             ui.separator();
@@ -1680,7 +1649,7 @@ impl eframe::App for MyApp {
                                 });
 
                                 egui::ScrollArea::vertical()
-                                    .min_scrolled_height(ROW_HEIGHT * 4.0 + SPACING * 3.0)
+                                    .min_scrolled_height(ROW_HEIGHT * 4.0 + ROW_HEIGHT / 3.0 + SPACING * 4.0)
                                     .show(ui, |ui| {
                                         // 每行列宽（滚动区域内单独计算一次）
                                         let width = ui.available_width() / 3.0 - SPACING * 2.0;
@@ -2037,6 +2006,7 @@ impl eframe::App for MyApp {
                             self.inner_strength = 0.0;
                             self.start_strength = 0.0;
                             self.hipfire_strength_factor = 0.0;
+                            self.assist_output_ema_alpha = 0.0;
                             self.vertical_strength_factor = 0.0;
                             self.aim_height_factor = 0.0;
                             self.config_changed = false;

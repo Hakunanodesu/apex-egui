@@ -9,21 +9,12 @@ use std::{
 };
 use vigem_client::{Client, Xbox360Wired, XGamepad};
 use crate::modules::enemy_det_thread::Detection;
+use crate::shared_constants::aim_assist::ASSIST_OUTPUT_EMA_ALPHA;
 use crate::shared_constants::error_limits::GAMEPAD_MAPPING_MAX_CONSECUTIVE_ERRORS;
 use crate::shared_constants::trigger_timing::TRIGGER_TIMING_UNIT_MS;
 use crate::utils::console_redirect::log_error;
 
-fn eval_inner_ramp_progress(t: f32, curve_mode: u8) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    match curve_mode {
-        0 => t,                                       // linear
-        1 => t * t,                                   // ease-in
-        2 => 3.0 * t * t - 2.0 * t * t * t,          // ease-in-out
-        _ => t,
-    }
-}
-
-// 新增：当右扳机按下时，基于检测结果对右摇杆进行修正
+// 当右扳机按下时，基于检测结果对右摇杆进行修正
 fn apply_right_trigger_adjustment(
     mapped_state: &mut XGamepad,
     d: &Detection,
@@ -36,7 +27,9 @@ fn apply_right_trigger_adjustment(
     vertical_str: f32,
     aim_height: f32,
     left_trigger_pressed: bool,
-    curve_mode: u8,
+    ema_alpha: f32,
+    // ema_xy: [x, y] 归一化辅助量 EMA 状态，两轴同一 α
+    ema_xy: &mut [f32; 2],
 ) {
     let center = outer_size / 2.0;
     let dx = d.x - center;
@@ -45,9 +38,9 @@ fn apply_right_trigger_adjustment(
     let strength = if 
         dx.abs() <= inner_size / 2.0 && dy.abs() <= inner_size / 2.0
     {
-        // inner区间：递增段曲线可配置（linear/ease-in）
+        // inner 区间：线性递增（t 为到内圈边界的归一化距离）
         let t = if inner_size > 0.0 { dist / (inner_size / 2.0) } else { 1.0 };
-        let progress = eval_inner_ramp_progress(t, curve_mode);
+        let progress = t.clamp(0.0, 1.0);
         init_str * (1.0 - progress) + inner_str * progress
     } else if dx.abs() <= d.w / 2.0 && dy.abs() <= d.h / 2.0 {
         // 目标框区间：最强平台（原始值）
@@ -73,9 +66,15 @@ fn apply_right_trigger_adjustment(
     let adjusted_x = x * multiplier;
     let adjusted_y = y * multiplier;
 
+    let a = ema_alpha.clamp(0.0, 1.0);
+    let raw = [adjusted_x, adjusted_y];
+    for i in 0..2 {
+        ema_xy[i] = a * raw[i] + (1.0 - a) * ema_xy[i];
+    }
+
     // 归一化到 -32768~32767 并叠加到右摇杆
-    let rx = (adjusted_x * 32767.0).clamp(-32768.0, 32767.0) as i16;
-    let ry = (adjusted_y * 32767.0).clamp(-32768.0, 32767.0) as i16;
+    let rx = (ema_xy[0] * 32767.0).clamp(-32768.0, 32767.0) as i16;
+    let ry = (ema_xy[1] * 32767.0).clamp(-32768.0, 32767.0) as i16;
 
     mapped_state.thumb_rx = mapped_state.thumb_rx.saturating_add(rx);
     mapped_state.thumb_ry = mapped_state.thumb_ry.saturating_add(ry);
@@ -103,9 +102,9 @@ impl ConMapper {
         vertical_str: f32,
         aim_height: f32,
         hipfire: f32,
+        assist_ema_alpha_str: Arc<Mutex<String>>,
         aim_enable: Arc<AtomicBool>,
         rapid_fire_mode: Arc<AtomicU8>, // 0=关闭, 1=始终连点, 2=半按, 3=完全按下连点, 4=根据枪械自动切换
-        inner_ramp_mode: Arc<AtomicU8>, // 0=linear, 1=ease-in, 2=ease-in-out
         weapon_rec_result: Option<Arc<Mutex<String>>>, // 枪械识别结果（模板名无后缀）
         rapid_fire_weapons: Vec<String>,               // 连点白名单
         special_weapons_aim_and_fire: Vec<String>,     // 特殊枪械：强制瞄准和开火
@@ -119,8 +118,8 @@ impl ConMapper {
         let error_flag_clone = error_flag.clone();
         let vg_clone = virtual_gamepad.clone();
         let rapid_fire_mode_clone = rapid_fire_mode.clone();
-        let inner_ramp_mode_clone = inner_ramp_mode.clone();
         let weapon_rec_result_clone = weapon_rec_result.clone();
+        let assist_ema_alpha_str_clone = assist_ema_alpha_str.clone();
         let rapid_fire_weapons = rapid_fire_weapons;
         let special_weapons_aim_and_fire = special_weapons_aim_and_fire;
         let special_weapons_release_to_fire = special_weapons_release_to_fire;
@@ -146,6 +145,7 @@ impl ConMapper {
             // 松手开火：松开后维持“按下”状态的截止时间
             let release_pulse_duration = Duration::from_millis(TRIGGER_TIMING_UNIT_MS);
             let mut release_pulse_until: Option<Instant> = None;
+            let mut assist_ema_xy: [f32; 2] = [0.0; 2];
 
             while !stop_clone.load(Ordering::SeqCst) {
                 let orig_state = match state_clone.lock() {
@@ -259,6 +259,7 @@ impl ConMapper {
                 }
                 
                 // 处理检测结果并计算xy偏移
+                let mut assist_applied = false;
                 if let Some(ref det_arc) = det_result_clone {
                     match det_arc.lock() {
                         Ok(det_guard) => {
@@ -269,6 +270,12 @@ impl ConMapper {
                                     // 特殊枪械可强制启用“瞄准和开火”模式
                                     let aim_enabled = aim_enable.load(Ordering::SeqCst) || is_aim_override_weapon;
                                     if right_trigger_pressed || (aim_enabled && left_trigger_pressed) {
+                                        let ema_alpha = assist_ema_alpha_str_clone
+                                            .lock()
+                                            .ok()
+                                            .and_then(|g| g.trim().parse::<f32>().ok())
+                                            .map(|a| a.clamp(0.0, 1.0))
+                                            .unwrap_or(ASSIST_OUTPUT_EMA_ALPHA);
                                         apply_right_trigger_adjustment(
                                             &mut mapped_state,
                                             d,
@@ -281,8 +288,10 @@ impl ConMapper {
                                             vertical_str,
                                             aim_height,
                                             left_trigger_pressed,
-                                            inner_ramp_mode_clone.load(Ordering::SeqCst),
+                                            ema_alpha,
+                                            &mut assist_ema_xy,
                                         );
+                                        assist_applied = true;
                                     }
                                 }
                             }
@@ -297,7 +306,11 @@ impl ConMapper {
                         }
                     }
                 }
-                
+                // 未施加辅助（松手或不满足条件）时 EMA 直接清零，不做逐渐泄压
+                if !assist_applied {
+                    assist_ema_xy = [0.0; 2];
+                }
+
                 // 更新虚拟手柄状态
                 if let Some(ref mut vg) = *vg_clone.lock().unwrap() {
                     if let Err(e) = vg.update(&mapped_state) {

@@ -57,10 +57,10 @@ pub struct MappingManager {
     inner_str: Arc<Mutex<String>>,
     init_str: Arc<Mutex<String>>,
     hipfire: Arc<Mutex<String>>,
+    assist_ema_alpha: Arc<Mutex<String>>,
     vertical_str: Arc<Mutex<String>>,
     aim_height: Arc<Mutex<String>>,
     rapid_fire_mode: Arc<AtomicU8>, // 连点模式：0=关闭, 1=始终连点, 2=半按扳机连点
-    inner_ramp_mode: Arc<AtomicU8>, // 内圈递增曲线：0=linear, 1=ease-in, 2=ease-in-out
     // 特殊枪械设定
     special_weapons_aim_and_fire: Vec<String>,
     special_weapons_release_to_fire: Vec<String>,
@@ -80,10 +80,10 @@ impl MappingManager {
         inner_str: Arc<Mutex<String>>,
         init_str: Arc<Mutex<String>>,
         hipfire: Arc<Mutex<String>>,
+        assist_ema_alpha: Arc<Mutex<String>>,
         vertical_str: Arc<Mutex<String>>,
         aim_height: Arc<Mutex<String>>,
         rapid_fire_mode: Arc<AtomicU8>,
-        inner_ramp_mode: Arc<AtomicU8>,
     ) -> Self {
         Self {
             state: MappingState::Idle,
@@ -101,10 +101,10 @@ impl MappingManager {
             inner_str,
             init_str,
             hipfire,
+            assist_ema_alpha,
             vertical_str,
             aim_height,
             rapid_fire_mode,
-            inner_ramp_mode,
             special_weapons_aim_and_fire: Vec::new(),
             special_weapons_release_to_fire: Vec::new(),
             device_available: false,
@@ -434,8 +434,8 @@ impl MappingManager {
             self.con_mapper = Some(ConMapper::start(
                 state, virtual_gamepad_ref, ready, Some(det.result()),
                 params.0, params.1, params.2, params.3, params.4,
-                params.5, params.6, params.7, self.aim_enable.clone(), self.rapid_fire_mode.clone(),
-                self.inner_ramp_mode.clone(),
+                params.5, params.6, params.7, self.assist_ema_alpha.clone(),
+                self.aim_enable.clone(), self.rapid_fire_mode.clone(),
                 weapon_rec_result, rapid_fire_weapons, special_aim, special_release,
             ));
         }
