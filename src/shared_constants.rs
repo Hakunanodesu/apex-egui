@@ -39,6 +39,18 @@ pub mod trigger_timing {
     pub const TRIGGER_TIMING_UNIT_MS: u64 = 10;
 }
 
+/// 输入设备相关常量
+pub mod input_device {
+    pub const PLAYSTATION: &str = "PlayStation";
+    pub const XBOX: &str = "Xbox";
+}
+
+/// XInput 相关常量
+pub mod xinput {
+    /// XInput 支持的用户槽位数（0..4）
+    pub const SLOT_COUNT: u32 = 4;
+}
+
 /// 吸附强度曲线相关常量
 pub mod aim_assist {
     /// 右摇杆辅助修正量 EMA 系数 α（`smoothed = α*raw + (1-α)*smoothed_prev`，两轴共用；配置与 UI 均为 0~1）

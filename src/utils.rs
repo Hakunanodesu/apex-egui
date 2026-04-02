@@ -1,6 +1,19 @@
 use std::fs;
 use crate::shared_constants::assist_curve::{INNER_RAMP_LINEAR, INNER_RAMP_SQUARE};
+use crate::shared_constants::input_device::{PLAYSTATION as INPUT_DEVICE_PLAYSTATION, XBOX as INPUT_DEVICE_XBOX};
 use crate::shared_constants::paths::{CONFIGS_DIR, CURRENT_CONFIG_FILE};
+
+fn default_input_device() -> String {
+    INPUT_DEVICE_XBOX.to_string()
+}
+
+pub fn normalize_input_device(s: &str) -> String {
+    if s.trim().eq_ignore_ascii_case(INPUT_DEVICE_PLAYSTATION) {
+        INPUT_DEVICE_PLAYSTATION.to_string()
+    } else {
+        INPUT_DEVICE_XBOX.to_string()
+    }
+}
 
 /// 内圈插值模式：仅 `"linear"` / `"square"`（其它输入视为 linear）
 pub fn normalize_inner_ramp_mode(s: &str) -> String {
@@ -50,6 +63,8 @@ pub struct ConfigFile {
     pub aa_activate_mode: String,
     pub use_controller: bool,
     pub vertical_strength_coefficient: f32,
+    #[serde(default = "default_input_device")]
+    pub input_device: String,
     #[serde(default)]
     pub rapid_fire_mode: String,
     /// 许可证代码，首次为空字符串，用户填写后保存
@@ -176,35 +191,19 @@ pub mod console_redirect {
 }
 
 pub mod enum_device_tool {
-    fn is_virtual_controller_name(name: &str) -> bool {
-        let lower = name.to_ascii_lowercase();
-        lower.contains("vigem")
-            || lower.contains("virtual")
-            || lower.contains("vgamepad")
-            || lower.contains("xbox 360 controller for windows")
+    use crate::shared_constants::xinput::SLOT_COUNT as XINPUT_SLOT_COUNT;
+
+    fn is_xinput_controller_connected(user_index: u32) -> bool {
+        use windows_sys::Win32::Foundation::ERROR_SUCCESS;
+        use windows_sys::Win32::UI::Input::XboxController::{XINPUT_STATE, XInputGetState};
+
+        let mut state: XINPUT_STATE = unsafe { std::mem::zeroed() };
+        unsafe { XInputGetState(user_index, &mut state) == ERROR_SUCCESS }
     }
 
-    /// 枚举可用于输入的物理手柄设备（返回 SDL 设备索引 与 显示名）
-    pub fn enumerate_controller_devices() -> Vec<(u32, String)> {
-        let mut devices = Vec::new();
-        if let Ok(ctx) = sdl2::init() {
-            if let Ok(joystick) = ctx.joystick() {
-                let count = joystick.num_joysticks().unwrap_or(0);
-                for index in 0..count {
-                    let index_u32 = index as u32;
-                    if let Ok(name) = joystick.name_for_index(index_u32) {
-                        if !is_virtual_controller_name(&name) {
-                            devices.push((index_u32, name));
-                        }
-                    }
-                }
-            }
-        }
-        devices
-    }
-
+    /// 仅检测 Xbox/XInput 设备是否存在（0~3 号槽位）
     pub fn enumerate_controllers() -> bool {
-        !enumerate_controller_devices().is_empty()
+        (0..XINPUT_SLOT_COUNT).any(is_xinput_controller_connected)
     }
 }
 

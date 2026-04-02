@@ -9,11 +9,12 @@ use std::path::Path;
 mod utils;
 mod modules;
 mod shared_constants;
-use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_height, load_config_file, save_config_file, save_current_config, normalize_inner_ramp_mode, ConfigFile, check_dir_exist};
+use utils::{find_json_files, find_onnx_files, read_current_config, get_screen_height, load_config_file, save_config_file, save_current_config, normalize_inner_ramp_mode, normalize_input_device, ConfigFile, check_dir_exist};
 use modules::update_check::{check_github_update, UpdateCheckResult, UpdateInfo};
 use shared_constants::RAPID_FIRE_WEAPON_STEMS;
 use shared_constants::auth::LICENSE_CODE;
 use shared_constants::defaults;
+use shared_constants::input_device::{PLAYSTATION as INPUT_DEVICE_PLAYSTATION, XBOX as INPUT_DEVICE_XBOX};
 use shared_constants::assist_curve::{INNER_RAMP_LINEAR, INNER_RAMP_MODE_ITEMS, INNER_RAMP_SQUARE};
 use shared_constants::paths::{CONFIGS_DIR, MODELS_DIR};
 use shared_constants::rapid_fire_mode;
@@ -23,7 +24,7 @@ use shared_constants::ui::{
     RAPID_FIRE_MODE_AUTO, RAPID_FIRE_MODE_FULL_TRIGGER, RAPID_FIRE_MODE_HALF_TRIGGER,
     RAPID_FIRE_MODE_DISABLED, RAPID_FIRE_MODE_ITEMS, RED_RGB, ROW_HEIGHT, SPACING, YELLOW_RGB,
 };
-use utils::enum_device_tool::{enumerate_controller_devices, enumerate_controllers};
+use utils::enum_device_tool::enumerate_controllers;
 use modules::mapping_state_machine::MappingManager;
 use shared_constants::weapon_rec::{TEMPLATE_H as CANNY_H, TEMPLATE_W as CANNY_W};
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -188,8 +189,8 @@ struct MyApp {
     
     // 输入设备选择
     use_controller: bool, // 是否使用手柄
-    controller_devices: Vec<(u32, String)>, // 可选手柄设备（SDL索引, 显示名）
-    selected_controller_index: Option<u32>, // 当前选中的 SDL 手柄设备索引
+    input_device_selected: String, // 当前输入设备（PlayStation / Xbox）
+    input_device_items: Vec<String>,
     rapid_fire_mode: Arc<AtomicU8>, // 连点模式（跨线程共享）：0=关闭, 1=始终连点, 2=半按扳机连点
     rapid_fire_mode_selected: String,
     rapid_fire_mode_items: Vec<String>,
@@ -273,9 +274,6 @@ struct MyApp {
     /// 最近一次检查结果是否为“已是最新版本”
     update_is_latest: Arc<AtomicBool>,
 
-    // 调试输出
-    debug_enabled: bool,
-    show_debug_window: bool, // 手柄键位调试窗口
     // 第一段曲线预览采样缓存（x, y）
     curve_preview_points_cache: Vec<(f32, f32)>,
     curve_preview_cache_key: Option<(f32, f32, f32, String)>, // (outer_diameter, start_strength, inner_strength, inner_ramp)
@@ -344,8 +342,8 @@ impl Default for MyApp {
             delete_config_confirm: None,
             add_config_dialog: None,
             use_controller: false, // 默认不使用手柄
-            controller_devices: Vec::new(),
-            selected_controller_index: None,
+            input_device_selected: INPUT_DEVICE_XBOX.to_string(),
+            input_device_items: vec![INPUT_DEVICE_PLAYSTATION.to_string(), INPUT_DEVICE_XBOX.to_string()],
             rapid_fire_mode,
             rapid_fire_mode_selected: defaults::RAPID_FIRE_MODE.to_string(),
             rapid_fire_mode_items: RAPID_FIRE_MODE_ITEMS.iter().map(|s| (*s).to_string()).collect(),
@@ -394,8 +392,6 @@ impl Default for MyApp {
             update_check_failure: Arc::new(Mutex::new(None)),
             update_check_in_progress: Arc::new(AtomicBool::new(false)),
             update_is_latest: Arc::new(AtomicBool::new(false)),
-            debug_enabled: false,
-            show_debug_window: false,
             curve_preview_points_cache: Vec::new(),
             curve_preview_cache_key: None,
         };
@@ -426,32 +422,8 @@ impl Default for MyApp {
 }
 
 impl MyApp {
-    fn refresh_controller_devices(&mut self) {
-        self.controller_devices = enumerate_controller_devices();
-        if let Some(selected) = self.selected_controller_index {
-            if !self
-                .controller_devices
-                .iter()
-                .any(|(idx, _)| *idx == selected)
-            {
-                self.selected_controller_index = self.controller_devices.first().map(|(idx, _)| *idx);
-            }
-        } else {
-            self.selected_controller_index = self.controller_devices.first().map(|(idx, _)| *idx);
-        }
-    }
-
-    fn selected_controller_text(&self) -> String {
-        if let Some(selected) = self.selected_controller_index {
-            if let Some((_, name)) = self
-                .controller_devices
-                .iter()
-                .find(|(idx, _)| *idx == selected)
-            {
-                return name.clone();
-            }
-        }
-        "请选择手柄".to_string()
+    fn selected_input_device_text(&self) -> String {
+        normalize_input_device(&self.input_device_selected)
     }
 
     fn ensure_curve_preview_points_cache(&mut self) {
@@ -539,6 +511,7 @@ impl MyApp {
     /// 从 ConfigFile 加载配置到 UI
     fn load_config(&mut self, config: &ConfigFile) {
         self.use_controller = config.use_controller;
+        self.input_device_selected = normalize_input_device(&config.input_device);
         self.aa_activate_mode_selected = config.aa_activate_mode.clone();
         self.special_weapons_aim_and_fire = config.special_weapons_aim_and_fire.clone();
         self.special_weapons_release_to_fire = config.special_weapons_release_to_fire.clone();
@@ -592,6 +565,7 @@ impl MyApp {
             aa_activate_mode: self.aa_activate_mode_selected.clone(),
             use_controller: self.use_controller,
             vertical_strength_coefficient: self.vertical_strength_factor,
+            input_device: normalize_input_device(&self.input_device_selected),
             rapid_fire_mode: self.rapid_fire_mode_selected.clone(),
             license_code: self.license_key.clone(),
             special_weapons_aim_and_fire: self.special_weapons_aim_and_fire.clone(),
@@ -719,7 +693,7 @@ impl MyApp {
             let special_aim = self.special_weapons_aim_and_fire.clone();
             let special_release = self.special_weapons_release_to_fire.clone();
             self.mapping_manager
-                .set_preferred_controller_index(self.selected_controller_index);
+                .set_input_device(self.selected_input_device_text());
             self.mapping_manager
                 .request_start(special_aim, special_release);
             self.core_enabled = true;
@@ -747,6 +721,7 @@ impl MyApp {
             aa_activate_mode: defaults::AA_ACTIVATE_MODE.to_string(),
             use_controller: false,
             vertical_strength_coefficient: defaults::VERTICAL_STRENGTH_COEFFICIENT,
+            input_device: INPUT_DEVICE_XBOX.to_string(),
             rapid_fire_mode: defaults::RAPID_FIRE_MODE.to_string(),
             license_code: String::new(),
             special_weapons_aim_and_fire: Vec::new(),
@@ -1039,9 +1014,6 @@ impl eframe::App for MyApp {
                     other_btn
                 ).clicked() {
                     self.param_tab = ParamTab::InputDevice;
-                    if self.use_controller {
-                        self.refresh_controller_devices();
-                    }
                 }
 
                 let aux_color = if self.param_tab == ParamTab::Accessibility { Some(GREEN) } else { None };
@@ -1524,7 +1496,6 @@ impl eframe::App for MyApp {
                             egui::RadioButton::new(self.use_controller, "手柄")
                         ).clicked() {
                             self.use_controller = true;
-                            self.refresh_controller_devices();
                             self.mark_config_changed();
                             self.save_config();
                         }
@@ -1540,42 +1511,29 @@ impl eframe::App for MyApp {
 
                         let combo_width = ui.available_width() - SPACING;
                         ui.add_enabled_ui(self.use_controller, |ui| {
+                            let old_device = self.input_device_selected.clone();
+                            let input_device_items = self.input_device_items.clone();
                             egui::ComboBox::from_id_salt("controller_device_combo")
                                 .width(combo_width)
-                                .selected_text(self.selected_controller_text())
+                                .selected_text(self.selected_input_device_text())
                                 .show_ui(ui, |ui| {
-                                    for (idx, name) in &self.controller_devices {
+                                    for item in &input_device_items {
                                         ui.selectable_value(
-                                            &mut self.selected_controller_index,
-                                            Some(*idx),
-                                            name,
+                                            &mut self.input_device_selected,
+                                            item.clone(),
+                                            item,
                                         );
                                     }
                                 });
+                            if self.input_device_selected != old_device {
+                                self.input_device_selected = normalize_input_device(&self.input_device_selected);
+                                self.mark_config_changed();
+                                self.save_config();
+                            }
                         });
                     });
 
                     ui.separator();
-
-                    ui.horizontal(|ui| {
-                        if ui.add_sized(
-                            egui::Vec2::new(CHARACTER_WIDTH * 7.0, ROW_HEIGHT),
-                            egui::Button::new("手柄键位调试")
-                        ).clicked() {
-                            self.mapping_manager
-                                .set_preferred_controller_index(self.selected_controller_index);
-                            self.show_debug_window = true;
-                            self.debug_enabled = true;
-                            modules::gamepad_reading_thread::set_debug_print_enabled(true);
-                            self.mapping_manager.start_con_reader_for_debug();
-                        }
-                    });
-
-                    // ui.add_sized(
-                    //     egui::Vec2::new(0.0, ROW_HEIGHT * 5.0 + ROW_HEIGHT / 3.0 + SPACING * 6.0),
-                    //     egui::Label::new("")
-                    // );
-
                     }
                     ParamTab::Accessibility => {
 
@@ -2622,62 +2580,6 @@ impl eframe::App for MyApp {
             self.show_inference_preview = false;
         }
         
-        // 手柄键位调试窗口：覆盖整个主窗口，下方展示调试输出
-        if self.show_debug_window {
-            // 强制连续刷新，保证调试输出实时更新
-            ctx.request_repaint();
-
-            let screen_rect = ctx.content_rect();
-            let dialog_width = screen_rect.width();
-            let dialog_height = screen_rect.height();
-            let dialog_pos = screen_rect.min;
-            
-            egui::Area::new(egui::Id::new("debug_dialog"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(dialog_pos)
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style())
-                        .fill(ctx.global_style().visuals.window_fill())
-                        .show(ui, |ui| {
-                            ui.set_min_size(egui::Vec2::new(dialog_width, dialog_height));
-
-                            // 调试输出（固定区域，无滚动条）
-                            ui.add_sized(
-                                egui::Vec2::new(CHARACTER_WIDTH * 5.0, ROW_HEIGHT),
-                                egui::Label::new("调试输出"),
-                            );
-
-                            let available_for_scroll = ui.available_height() - ROW_HEIGHT * 2.0 - SPACING * 2.0;
-                            let text_area_height = available_for_scroll.max(ROW_HEIGHT * 3.0);
-
-                            let (rect, _) = ui.allocate_exact_size(
-                                egui::Vec2::new(dialog_width - SPACING * 2.0, text_area_height),
-                                egui::Sense::hover(),
-                            );
-
-                            let text = modules::gamepad_reading_thread::get_debug_text();
-                            ui.painter().text(
-                                rect.min,
-                                egui::Align2::LEFT_TOP,
-                                text,
-                                egui::TextStyle::Monospace.resolve(ui.style()),
-                                ui.visuals().text_color(),
-                            );
-                                                        
-                            // 底部：关闭按钮
-                            ui.horizontal(|ui| {
-                                ui.add_sized(egui::Vec2::new((dialog_width - CHARACTER_WIDTH * 3.0) / 2.0 - SPACING * 1.75, ROW_HEIGHT), egui::Label::new(""));
-                                if ui.add_sized(egui::Vec2::new(CHARACTER_WIDTH * 3.0, ROW_HEIGHT), egui::Button::new("关闭")).clicked() {
-                                    self.show_debug_window = false;
-                                    self.debug_enabled = false;
-                                    modules::gamepad_reading_thread::set_debug_print_enabled(false);
-                                    self.mapping_manager.stop_con_reader_for_debug();
-                                }
-                            });
-                        });
-                });
-        }
-        
         // 显示帮助窗口
         if self.show_help_window {
             // 创建模态遮罩层，阻止主窗口交互
@@ -2685,10 +2587,11 @@ impl eframe::App for MyApp {
             
             // 使用缓存的检测结果
             let vigem_ready = self.help_window_vigem_ready.unwrap_or(false);
+            let controller_ready = enumerate_controllers();
             
             // 计算对话框大小和位置（居中显示）
             let dialog_width = CHARACTER_WIDTH * 12.8 + SPACING * 3.5;
-            let dialog_height = ROW_HEIGHT * 4.0 + SPACING * 5.0;
+            let dialog_height = ROW_HEIGHT * 5.0 + SPACING * 6.0;
             let dialog_pos = egui::pos2(
                 ctx.content_rect().center().x - dialog_width / 2.0,
                 ctx.content_rect().center().y - dialog_height / 2.0,
@@ -2729,7 +2632,28 @@ impl eframe::App for MyApp {
                                 }
                             });
                             
-                            // 第二行：游戏窗口 | 就绪/未就绪
+                            // 第二行：Xbox手柄 | 就绪/未就绪
+                            ui.horizontal(|ui| {
+                                ui.add_sized(
+                                    egui::Vec2::new(CHARACTER_WIDTH * 5.8, ROW_HEIGHT),
+                                    egui::Label::new("输入设备")
+                                );
+                                
+                                ui.add_sized(
+                                    egui::Vec2::new(CHARACTER_WIDTH * 4.0, ROW_HEIGHT),
+                                    egui::Label::new(
+                                        egui::RichText::new(if controller_ready { "就绪" } else { "未就绪" })
+                                            .color(if controller_ready { GREEN } else { RED })
+                                    )
+                                );
+                                
+                                ui.add_sized(
+                                    egui::Vec2::new(CHARACTER_WIDTH * 3.0, ROW_HEIGHT),
+                                    egui::Label::new("")
+                                );
+                            });
+
+                            // 第三行：游戏窗口 | 就绪/未就绪
                             let game_window_ready = modules::screen_capture_thread::is_apex_window_ready();
                             ui.horizontal(|ui| {
                                 ui.add_sized(

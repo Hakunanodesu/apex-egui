@@ -13,6 +13,7 @@ use crate::modules::{
 };
 use crate::shared_constants::RAPID_FIRE_WEAPON_STEMS;
 use crate::shared_constants::{defaults, paths::MODELS_DIR, rapid_fire_mode};
+use crate::shared_constants::input_device::XBOX as INPUT_DEVICE_XBOX;
 use crate::utils::{
     enum_device_tool::enumerate_controllers,
     console_redirect::log_error,
@@ -49,7 +50,7 @@ pub struct MappingManager {
     
     // 配置参数
     current_model: String,
-    preferred_controller_index: Option<u32>, // 期望读取的 SDL 手柄设备索引
+    input_device: String, // 当前输入设备类型（PlayStation / Xbox）
     aim_enable: Arc<AtomicBool>, // 瞄准辅助开关
     outer_size: Arc<Mutex<String>>,
     inner_size: Arc<Mutex<String>>,
@@ -95,7 +96,7 @@ impl MappingManager {
             con_reader: None,
             con_mapper: None,
             current_model,
-            preferred_controller_index: None,
+            input_device: INPUT_DEVICE_XBOX.to_string(),
             aim_enable,
             outer_size,
             inner_size,
@@ -174,14 +175,21 @@ impl MappingManager {
             }
             
             MappingState::CheckingDevice => {
-                *con_exist = enumerate_controllers();
-                self.device_available = *con_exist;
-                
-                if self.device_available {
-                    self.state = MappingState::StartingCapture;
+                if self.input_device == INPUT_DEVICE_XBOX {
+                    *con_exist = enumerate_controllers();
+                    self.device_available = *con_exist;
+                    if self.device_available {
+                        self.state = MappingState::StartingCapture;
+                    } else {
+                        self.state = MappingState::Error {
+                            message: "未检测到Xbox手柄设备".to_string(),
+                            from_state: Box::new(MappingState::CheckingDevice),
+                            _should_retry: true,
+                        };
+                    }
                 } else {
                     self.state = MappingState::Error {
-                        message: "未检测到手柄设备".to_string(),
+                        message: "PlayStation 输入暂未实现".to_string(),
                         from_state: Box::new(MappingState::CheckingDevice),
                         _should_retry: true,
                     };
@@ -235,7 +243,7 @@ impl MappingManager {
             
             MappingState::StartingReader => {
                 if self.con_reader.is_none() {
-                    self.con_reader = Some(ConReader::start(self.preferred_controller_index));
+                    self.con_reader = Some(ConReader::start(self.input_device.clone()));
                 }
                 self.state = MappingState::StartingMapper;
             }
@@ -572,23 +580,7 @@ impl MappingManager {
         &self.weapon_rec
     }
 
-    /// 仅用于调试窗口：若当前未运行智慧核心且尚未启动 ConReader，则启动 ConReader
-    pub fn start_con_reader_for_debug(&mut self) {
-        if matches!(self.state, MappingState::Idle) && self.con_reader.is_none() {
-            self.con_reader = Some(ConReader::start(self.preferred_controller_index));
-        }
-    }
-
-    /// 仅用于调试窗口：若当前未运行智慧核心，则停止 ConReader
-    pub fn stop_con_reader_for_debug(&mut self) {
-        if matches!(self.state, MappingState::Idle) {
-            if let Some(reader) = self.con_reader.take() {
-                reader.stop();
-            }
-        }
-    }
-
-    pub fn set_preferred_controller_index(&mut self, preferred_index: Option<u32>) {
-        self.preferred_controller_index = preferred_index;
+    pub fn set_input_device(&mut self, input_device: String) {
+        self.input_device = input_device;
     }
 } 
