@@ -1,14 +1,14 @@
-use std::{
-    collections::VecDeque,
-    io::{self, Write},
-    sync::{
-        Arc,
-        Mutex,
-        atomic::{AtomicBool, Ordering},
-    },
-    thread::{self, JoinHandle},
-    time::{Duration, Instant},
+use std::sync::{
+    Arc,
+    Mutex,
+    atomic::{AtomicBool, Ordering},
 };
+use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
+#[cfg(debug_assertions)]
+use std::collections::VecDeque;
+#[cfg(debug_assertions)]
+use std::io::{self, Write};
 use hidapi::{DeviceInfo, HidApi, HidDevice};
 use vigem_client::{XButtons, XGamepad};
 use windows_sys::Win32::Foundation::ERROR_SUCCESS;
@@ -45,6 +45,7 @@ enum PadProfile {
 }
 
 impl PadProfile {
+    #[cfg(debug_assertions)]
     fn name(self) -> &'static str {
         match self {
             PadProfile::DualSense => "DualSense",
