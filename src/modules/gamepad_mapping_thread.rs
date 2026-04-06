@@ -109,6 +109,9 @@ impl MapperPerfTracker {
 fn apply_right_trigger_adjustment(
     mapped_state: &mut XGamepad,
     d: &Detection,
+    dx: f32,
+    dy: f32,
+    dist: f32,
     outer_size: f32,
     inner_size: f32,
     outer_str: f32,
@@ -116,16 +119,11 @@ fn apply_right_trigger_adjustment(
     init_str: f32,
     hipfire: f32,
     vertical_str: f32,
-    aim_height: f32,
     left_trigger_pressed: bool,
     ema_alpha: f32,
     ema_xy: &mut [f32; 2],
     inner_ramp_mode: &str,
 ) -> bool {
-    let center = outer_size / 2.0;
-    let dx = d.x - center;
-    let dy = (d.y + (0.5 - aim_height) * d.h) - center;
-    let dist = ((dx * dx + dy * dy).sqrt()).min(center);
     let strength = if 
         dist <= inner_size / 2.0
     {
@@ -365,7 +363,24 @@ impl ConMapper {
                     match det_arc.lock() {
                         Ok(det_guard) => {
                             if let Some(detections) = &*det_guard {
-                                if let Some(d) = detections.first() {
+                                let center = outer_size / 2.0;
+                                let mut sorted_by_center_dist: Vec<(&Detection, f32, f32, f32)> =
+                                    detections
+                                        .iter()
+                                        .map(|d| {
+                                            let dx = d.x - center;
+                                            let dy = (d.y + (0.5 - aim_height) * d.h) - center;
+                                            let dist = (dx * dx + dy * dy).sqrt();
+                                            (d, dx, dy, dist)
+                                        })
+                                        .collect();
+                                sorted_by_center_dist.sort_by(|a, b| {
+                                    a.3.partial_cmp(&b.3)
+                                        .unwrap_or(std::cmp::Ordering::Equal)
+                                });
+                                if let Some((d, dx, dy, dist)) =
+                                    sorted_by_center_dist.first().copied()
+                                {
                                     if assist_eligible {
                                         let ema_alpha = assist_ema_alpha_str_clone
                                             .lock()
@@ -381,6 +396,9 @@ impl ConMapper {
                                         assist_applied = apply_right_trigger_adjustment(
                                             &mut mapped_state,
                                             d,
+                                            dx,
+                                            dy,
+                                            dist,
                                             outer_size,
                                             inner_size,
                                             outer_str,
@@ -388,7 +406,6 @@ impl ConMapper {
                                             init_str,
                                             hipfire,
                                             vertical_str,
-                                            aim_height,
                                             left_trigger_pressed,
                                             ema_alpha,
                                             &mut assist_ema_xy,
