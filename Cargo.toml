@@ -1,6 +1,6 @@
 [package]
 name = "apex-egui"
-version = "4.1.0"
+version = "4.1.1"
 edition = "2024"
 
 [profile.release]
@@ -10,6 +10,13 @@ codegen-units = 1
 debug = false
 panic = "abort"
 strip = true
+
+# 本地机器内存紧张时用：`cargo build --profile release-lowmem`
+#（比上面 `fat` LTO + 单 codegen unit 省很多峰值内存，体积/速度略差）
+[profile.release-lowmem]
+inherits = "release"
+lto = "thin"
+codegen-units = 16
 
 [dependencies]
 eframe = "0.34.1"

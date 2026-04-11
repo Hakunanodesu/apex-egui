@@ -4,6 +4,7 @@ use ort::{
     session::{builder::GraphOptimizationLevel, IoBinding, Session},
     value::{Tensor, TensorElementType, TensorRef},
 };
+use std::collections::HashSet;
 use std::sync::{Arc, Mutex, atomic::{AtomicBool, AtomicU64, Ordering}};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
@@ -40,7 +41,7 @@ impl Default for DetectionConfig {
 
 impl DetectionConfig {
     /// 将classes字符串解析为Vec<usize>
-    fn parse_classes(&self) -> Vec<usize> {
+    fn parse_classes(&self) -> HashSet<usize> {
         self.classes
             .split(',')
             .filter_map(|s| s.trim().parse().ok())
@@ -130,7 +131,7 @@ struct OnnxDetector {
     inference_size: usize,  // 新增：推理尺寸
     conf_thres: f32,
     iou_thres: f32,
-    classes: Vec<usize>,
+    classes: HashSet<usize>,
     resizer: Resizer,
     src_rgb_buf: Vec<u8>,
     dst_rgb_buf: Vec<u8>,
@@ -372,11 +373,19 @@ impl OnnxDetector {
 
         // 2. 对 cand 做 NMS
         cand.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap());
-        let mut keep = Vec::new();
-        while !cand.is_empty() {
-            let top = cand.remove(0); // 取第一个（分数最高）
+        let mut keep = Vec::with_capacity(cand.len());
+        let mut suppressed = vec![false; cand.len()];
+        for i in 0..cand.len() {
+            if suppressed[i] {
+                continue;
+            }
+            let top = cand[i].clone();
             keep.push(top.clone());
-            cand.retain(|d| iou(&top, d) < self.iou_thres);
+            for j in (i + 1)..cand.len() {
+                if !suppressed[j] && iou(&top, &cand[j]) >= self.iou_thres {
+                    suppressed[j] = true;
+                }
+            }
         }
 
         Ok((keep, preprocess_ms, infer_ms))
@@ -453,6 +462,7 @@ impl DetectorThread {
             let mut detector = detector;
             let mut last_version: u64 = 0;
             let mut consecutive_errors = 0;
+            let mut current_buffer = vec![0u8; src_size * src_size * 3];
             
             while !stop_flag_clone.load(Ordering::SeqCst) {
                 // 1. 先检查版本号，避免不必要的锁和克隆
@@ -460,7 +470,7 @@ impl DetectorThread {
                 
                 // 2. 只有版本号变化时才克隆缓冲区
                 if current_version != last_version {
-                    let current_buffer = {
+                    let copy_ok = {
                         let buf_guard = match buffer.lock() {
                             Ok(guard) => guard,
                             Err(e) => {
@@ -470,16 +480,22 @@ impl DetectorThread {
                                     error_flag_clone.store(true, Ordering::SeqCst);
                                     break;
                                 }
-                                thread::sleep(Duration::from_millis(10));
+                                thread::sleep(Duration::from_millis(1));
                                 continue;
                             }
                         };
-                        // 立即克隆数据并释放锁
-                        buf_guard.clone()
+                        if current_buffer.len() != buf_guard.len() {
+                            current_buffer.resize(buf_guard.len(), 0);
+                        }
+                        current_buffer.copy_from_slice(&buf_guard);
+                        true
                     };
+                    if !copy_ok {
+                        continue;
+                    }
                     
                     // 3. 进行推理
-                    match detector.detect(&current_buffer) {
+                    match detector.detect(current_buffer.as_slice()) {
                         Ok((detections, preprocess_ms, infer_ms)) => {
                             match result_clone.lock() {
                                 Ok(mut res) => {
@@ -515,7 +531,6 @@ impl DetectorThread {
                     }
                     last_version = current_version; // 更新版本号
                 }
-                thread::sleep(Duration::from_millis(1));
             }
         });
 

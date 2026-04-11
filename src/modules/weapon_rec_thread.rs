@@ -233,22 +233,20 @@ impl WeaponRecThread {
                 let match_start = Instant::now();
                 let current_version = version2.load(Ordering::Acquire);
                 if current_version == last_version {
-                    // 未检测到新的 ROI 图像版本时，短暂休眠以减少 CPU 占用
-                    thread::sleep(Duration::from_millis(1));
                     continue;
                 }
                 let (roi_copy, crop_w, crop_h) = {
                     let buf = match buffer2.lock() {
                         Ok(g) => g,
                         Err(_) => {
-                            thread::sleep(Duration::from_millis(5));
+                            thread::sleep(Duration::from_millis(1));
                             continue;
                         }
                     };
                     let (cw, ch) = match crop_size.lock() {
                         Ok(g) => *g,
                         Err(_) => {
-                            thread::sleep(Duration::from_millis(5));
+                            thread::sleep(Duration::from_millis(1));
                             continue;
                         }
                     };

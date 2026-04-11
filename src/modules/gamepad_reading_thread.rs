@@ -710,7 +710,6 @@ impl ConReader {
                         &latest_debug_lines,
                         &mut last_debug_render,
                     );
-                    thread::sleep(Duration::from_millis(1));
                 }
                 return;
             }
@@ -848,7 +847,6 @@ impl ConReader {
                     &latest_debug_lines,
                     &mut last_debug_render,
                 );
-                thread::sleep(Duration::from_millis(1));
             }
         });
 

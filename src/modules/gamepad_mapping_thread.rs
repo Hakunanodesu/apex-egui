@@ -235,7 +235,6 @@ impl ConMapper {
                 if stop_clone.load(Ordering::SeqCst) {
                     return; // 如果收到停止信号就退出
                 }
-                thread::sleep(Duration::from_millis(1));
             }
             
             // println!("手柄映射线程已启动，使用0号虚拟手柄");
@@ -271,7 +270,7 @@ impl ConMapper {
                             error_flag_clone.store(true, Ordering::SeqCst);
                             break;
                         }
-                        thread::sleep(Duration::from_millis(10));
+                        thread::sleep(Duration::from_millis(1));
                         continue;
                     }
                 }; // 每次都用原始state
@@ -458,7 +457,6 @@ impl ConMapper {
                     perf_tracker.maybe_publish();
                 }
                 
-                thread::sleep(Duration::from_millis(1));
             }
 
             // 注意：不在这里 unplug 虚拟手柄，它应该在整个手柄模式期间保持存在

@@ -52,6 +52,10 @@ struct CaptureHandler {
     enable_weapon_roi: bool,
     last_weapon_roi_write: Option<Instant>,
     crop_size: Arc<Mutex<(usize, usize)>>,
+    /// 复用的中心裁剪临时缓冲，避免每帧分配
+    temp_buffer: Vec<u8>,
+    /// 复用的武器 ROI 临时缓冲，避免每次更新分配
+    temp_roi: Vec<u8>,
 }
 
 impl GraphicsCaptureApiHandler for CaptureHandler {
@@ -94,6 +98,8 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
             enable_weapon_roi,
             last_weapon_roi_write: None,
             crop_size,
+            temp_buffer: vec![0u8; square_size * square_size * 3],
+            temp_roi: Vec::new(),
         })
     }
 
@@ -133,7 +139,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
         
         // 4. 在锁外准备数据，避免长时间持有锁
         let buffer_size = sq * sq * 3;
-        let mut temp_buffer = vec![0u8; buffer_size];
+        if self.temp_buffer.len() != buffer_size {
+            self.temp_buffer.resize(buffer_size, 0);
+        }
         
         // 5. 优化像素拷贝：先验证边界，减少循环内检查
         let max_src_start = (y_off + sq - 1) * stride + (x_off + sq) * 4;
@@ -152,9 +160,9 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 let src_pixel = &src_row[col * 4..col * 4 + 3];
                 let chw_idx = row * sq + col;
                 
-                temp_buffer[0 * sq * sq + chw_idx] = src_pixel[0]; // R
-                temp_buffer[1 * sq * sq + chw_idx] = src_pixel[1]; // G
-                temp_buffer[2 * sq * sq + chw_idx] = src_pixel[2]; // B
+                self.temp_buffer[0 * sq * sq + chw_idx] = src_pixel[0]; // R
+                self.temp_buffer[1 * sq * sq + chw_idx] = src_pixel[1]; // G
+                self.temp_buffer[2 * sq * sq + chw_idx] = src_pixel[2]; // B
             }
         }
         
@@ -166,7 +174,7 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                     dst.resize(buffer_size, 0);
                 }
                 // 直接拷贝，不需要清零
-                dst.copy_from_slice(&temp_buffer);
+                dst.copy_from_slice(&self.temp_buffer);
                 // 缓冲区更新后，递增版本号
                 self.version.fetch_add(1, Ordering::Relaxed);
             }
@@ -192,22 +200,24 @@ impl GraphicsCaptureApiHandler for CaptureHandler {
                 let crop_h = crop_h.min(height_full.saturating_sub(y_start));
                 if crop_w > 0 && crop_h > 0 {
                     let roi_size = crop_w * crop_h * 3;
-                    let mut temp_roi = vec![0u8; roi_size];
+                    if self.temp_roi.len() != roi_size {
+                        self.temp_roi.resize(roi_size, 0);
+                    }
                     for row in 0..crop_h {
                         let src_row_start = (y_start + row) * stride + x_start * 4;
                         let src_row = &src[src_row_start..src_row_start + crop_w * 4];
                         for col in 0..crop_w {
                             let dst_idx = (row * crop_w + col) * 3;
-                            temp_roi[dst_idx] = src_row[col * 4];
-                            temp_roi[dst_idx + 1] = src_row[col * 4 + 1];
-                            temp_roi[dst_idx + 2] = src_row[col * 4 + 2];
+                            self.temp_roi[dst_idx] = src_row[col * 4];
+                            self.temp_roi[dst_idx + 1] = src_row[col * 4 + 1];
+                            self.temp_roi[dst_idx + 2] = src_row[col * 4 + 2];
                         }
                     }
                     if let Ok(mut dst2) = self.buffer2.lock() {
                         if dst2.len() != roi_size {
                             dst2.resize(roi_size, 0);
                         }
-                        dst2.copy_from_slice(&temp_roi);
+                        dst2.copy_from_slice(&self.temp_roi);
                         self.version2.fetch_add(1, Ordering::Relaxed);
                         if let Ok(mut cs) = self.crop_size.lock() {
                             *cs = (crop_w, crop_h);
