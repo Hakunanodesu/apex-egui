@@ -3,3 +3,7 @@ obj/
 .vscode/
 .codex/
 imgui.ini
+
+# Models：保留目录，不追踪目录内生成/下载的文件
+Models/*
+!Models/.gitkeep

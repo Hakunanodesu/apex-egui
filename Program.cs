@@ -2,8 +2,10 @@
 using System.Numerics;
 using System.Diagnostics;
 using System.Threading;
-using System.Runtime.InteropServices;
+using System.Text.Json;
 using ImGuiNET;
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Common.Input;
@@ -13,12 +15,10 @@ using StbImageSharp;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.DXGI;
-using Windows.Graphics.Capture;
-using Windows.Graphics.DirectX;
-using Windows.Graphics.DirectX.Direct3D11;
-using WinRT;
 using static Vortice.Direct3D11.D3D11;
 using static Vortice.DXGI.DXGI;
+
+RuntimePerformance.ConfigureProcessPriority();
 
 var nativeWindowSettings = new NativeWindowSettings
 {
@@ -36,17 +36,6 @@ public sealed class DemoWindow : GameWindow
 {
     private ImGuiController? _controller;
     private float _dpiScale = 1.0f;
-    private WgcCaptureWorker? _wgcWorker;
-    private int _wgcPreviewTexture;
-    private int _wgcPreviewWidth;
-    private int _wgcPreviewHeight;
-    private int _wgcLastPreviewFrameId;
-    private byte[] _wgcUploadBuffer = Array.Empty<byte>();
-    private string _wgcStatus = "未启动";
-    private readonly RealtimePerfStats _wgcPerfStats = new();
-    private PerfSnapshot _wgcPerfSnapshot;
-    private readonly List<double> _wgcSampleBuffer = new(256);
-    private double _wgcPreviewRefreshAccumulatorMs;
 
     private DesktopCaptureWorker? _dxgiWorker;
     private int _dxgiPreviewTexture;
@@ -59,6 +48,15 @@ public sealed class DemoWindow : GameWindow
     private PerfSnapshot _dxgiPerfSnapshot;
     private readonly List<double> _dxgiSampleBuffer = new(256);
     private double _dxgiPreviewRefreshAccumulatorMs;
+    private bool _dxgiPreviewEnabled = true;
+
+    private readonly List<OnnxModelConfig> _onnxModels = new();
+    private int _onnxSelectedModelIndex;
+    private OnnxDmlWorker? _onnxWorker;
+    private string _onnxStatus = "未启动";
+    private OnnxInferenceSnapshot _onnxSnapshot;
+    private int _onnxLastFrameId;
+    private byte[] _onnxUploadBuffer = Array.Empty<byte>();
 
     public DemoWindow(GameWindowSettings gameWindowSettings, NativeWindowSettings nativeWindowSettings)
         : base(gameWindowSettings, nativeWindowSettings)
@@ -72,6 +70,7 @@ public sealed class DemoWindow : GameWindow
         VSync = VSyncMode.Off;
         RefreshDpiScale();
         GL.ClearColor(0.10f, 0.11f, 0.13f, 1.0f);
+        RefreshOnnxModels();
     }
 
     protected override void OnRenderFrame(FrameEventArgs args)
@@ -83,17 +82,10 @@ public sealed class DemoWindow : GameWindow
         }
 
         RefreshDpiScale();
-        UpdateWgcPreview((float)args.Time);
-        var wgcTelemetry = _wgcWorker?.GetTelemetrySnapshot() ?? default;
-        _wgcSampleBuffer.Clear();
-        _wgcWorker?.DrainCaptureSamples(_wgcSampleBuffer);
-        _wgcPerfStats.PushSample((float)args.Time, wgcTelemetry, _wgcSampleBuffer);
-        if (_wgcPerfStats.TryBuildSnapshot(out var wgcSnapshot))
+        if (_dxgiPreviewEnabled)
         {
-            _wgcPerfSnapshot = wgcSnapshot;
+            UpdateDxgiPreview((float)args.Time);
         }
-
-        UpdateDxgiPreview((float)args.Time);
         var dxgiTelemetry = _dxgiWorker?.GetTelemetrySnapshot() ?? default;
         _dxgiSampleBuffer.Clear();
         _dxgiWorker?.DrainCaptureSamples(_dxgiSampleBuffer);
@@ -101,6 +93,13 @@ public sealed class DemoWindow : GameWindow
         if (_dxgiPerfStats.TryBuildSnapshot(out var dxgiSnapshot))
         {
             _dxgiPerfSnapshot = dxgiSnapshot;
+        }
+
+        PumpOnnxFromDxgi();
+        if (_onnxWorker is not null)
+        {
+            _onnxSnapshot = _onnxWorker.GetSnapshot();
+            _onnxStatus = _onnxSnapshot.Status;
         }
 
         _controller.Update(this, (float)args.Time, _dpiScale);
@@ -130,7 +129,7 @@ public sealed class DemoWindow : GameWindow
         {
             if (ImGui.BeginTabItem("主页"))
             {
-                DrawWgcTab();
+                DrawHomeTab();
                 ImGui.EndTabItem();
             }
 
@@ -146,18 +145,9 @@ public sealed class DemoWindow : GameWindow
         ImGui.End();
     }
 
-    private void DrawWgcTab()
+    private void DrawHomeTab()
     {
-        DrawCapturePanel(
-            "WGC 屏幕捕获",
-            _wgcStatus,
-            _wgcPerfSnapshot,
-            _wgcWorker is not null,
-            OnStartWgcClicked,
-            OnStopWgcClicked,
-            _wgcPreviewTexture,
-            _wgcPreviewWidth,
-            _wgcPreviewHeight);
+        // Intentionally left blank.
     }
 
     private void DrawDxgiTab()
@@ -169,9 +159,157 @@ public sealed class DemoWindow : GameWindow
             _dxgiWorker is not null,
             OnStartDxgiClicked,
             OnStopDxgiClicked,
+            ref _dxgiPreviewEnabled,
             _dxgiPreviewTexture,
             _dxgiPreviewWidth,
             _dxgiPreviewHeight);
+
+        ImGui.Separator();
+        ImGui.Text("运行优先级");
+        ImGui.Text($"进程优先级: {RuntimePerformance.GetProcessPriorityText()}");
+        ImGui.Text($"DXGI GPU 优先级: {RuntimePerformance.DxgiGpuPriorityStatus}");
+
+        ImGui.Separator();
+        DrawOnnxDmlEpTab();
+    }
+
+    private void DrawOnnxDmlEpTab()
+    {
+        ImGui.Text("ONNX Runtime (DirectML EP) 推理调试");
+        ImGui.Separator();
+        ImGui.Text($"状态: {_onnxStatus}");
+
+        if (ImGui.Button("刷新模型"))
+        {
+            RefreshOnnxModels();
+        }
+
+        if (_onnxModels.Count == 0)
+        {
+            ImGui.Text("Models 目录中未找到可用的 json+onnx 模型配置。");
+            return;
+        }
+
+        var selected = _onnxModels[Math.Clamp(_onnxSelectedModelIndex, 0, _onnxModels.Count - 1)];
+        if (ImGui.BeginCombo("模型", selected.DisplayName))
+        {
+            for (var i = 0; i < _onnxModels.Count; i++)
+            {
+                var isSelected = i == _onnxSelectedModelIndex;
+                if (ImGui.Selectable(_onnxModels[i].DisplayName, isSelected))
+                {
+                    _onnxSelectedModelIndex = i;
+                }
+
+                if (isSelected)
+                {
+                    ImGui.SetItemDefaultFocus();
+                }
+            }
+
+            ImGui.EndCombo();
+        }
+
+        selected = _onnxModels[Math.Clamp(_onnxSelectedModelIndex, 0, _onnxModels.Count - 1)];
+        ImGui.Text($"输入尺寸: {selected.InputWidth}x{selected.InputHeight}");
+        ImGui.Text($"conf_thres: {selected.ConfThreshold:0.###}");
+        ImGui.Text($"iou_thres: {selected.IouThreshold:0.###}");
+        ImGui.Text($"classes: {selected.ClassesRaw}");
+
+        if (_onnxWorker is null)
+        {
+            if (ImGui.Button("启动推理"))
+            {
+                StartOnnxInference(selected);
+            }
+        }
+        else
+        {
+            if (ImGui.Button("停止推理"))
+            {
+                StopOnnxInference("已停止");
+            }
+        }
+
+        ImGui.Separator();
+        ImGui.Text($"推理帧率: {_onnxSnapshot.InferenceFps:0.0} fps");
+        ImGui.Text($"推理耗时均值: {_onnxSnapshot.AvgInferenceMs:0.00} ms");
+        ImGui.Text($"推理耗时 P95: {_onnxSnapshot.P95InferenceMs:0.00} ms");
+        ImGui.Text($"推理耗时 P99: {_onnxSnapshot.P99InferenceMs:0.00} ms");
+        ImGui.Text($"检测框数量: {_onnxSnapshot.DetectionCount}");
+        ImGui.Text($"输出摘要: {_onnxSnapshot.OutputSummary}");
+    }
+
+    private void RefreshOnnxModels()
+    {
+        _onnxModels.Clear();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var model in OnnxModelConfigLoader.LoadFromDirectory(Path.Combine(AppContext.BaseDirectory, "Models")))
+        {
+            if (seen.Add(model.OnnxPath))
+            {
+                _onnxModels.Add(model);
+            }
+        }
+
+        foreach (var model in OnnxModelConfigLoader.LoadFromDirectory(Path.Combine(Environment.CurrentDirectory, "Models")))
+        {
+            if (seen.Add(model.OnnxPath))
+            {
+                _onnxModels.Add(model);
+            }
+        }
+
+        _onnxModels.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase));
+        _onnxSelectedModelIndex = Math.Clamp(_onnxSelectedModelIndex, 0, Math.Max(0, _onnxModels.Count - 1));
+    }
+
+    private void StartOnnxInference(OnnxModelConfig model)
+    {
+        try
+        {
+            StopOnnxInference("重启推理");
+            if (_dxgiWorker is null)
+            {
+                StartDxgiCapture();
+            }
+
+            _dxgiWorker?.SetCaptureRegion(model.InputWidth, model.InputHeight);
+            _onnxLastFrameId = 0;
+            _onnxUploadBuffer = Array.Empty<byte>();
+            _onnxWorker = new OnnxDmlWorker(model);
+            _onnxStatus = "推理中";
+        }
+        catch (Exception ex)
+        {
+            _onnxStatus = $"启动失败: {ex.GetType().Name}: {ex.Message}";
+            _onnxWorker = null;
+        }
+    }
+
+    private void StopOnnxInference(string status)
+    {
+        _onnxWorker?.Dispose();
+        _onnxWorker = null;
+        _onnxStatus = status;
+        _onnxSnapshot = default;
+    }
+
+    private void PumpOnnxFromDxgi()
+    {
+        if (_onnxWorker is null || _dxgiWorker is null)
+        {
+            return;
+        }
+
+        if (_dxgiWorker.TryCopyLatestFrame(ref _onnxUploadBuffer, ref _onnxLastFrameId, out var width, out var height, out var error))
+        {
+            _onnxWorker.SubmitFrame(_onnxUploadBuffer, width, height, _onnxLastFrameId);
+        }
+        else if (!string.IsNullOrWhiteSpace(error))
+        {
+            StopOnnxInference($"推理输入错误: {error}");
+        }
     }
 
     private void DrawCapturePanel(
@@ -181,6 +319,7 @@ public sealed class DemoWindow : GameWindow
         bool isRunning,
         Action onStart,
         Action onStop,
+        ref bool previewEnabled,
         int previewTexture,
         int previewWidth,
         int previewHeight)
@@ -213,36 +352,27 @@ public sealed class DemoWindow : GameWindow
 
         ImGui.SameLine();
         ImGui.Text($"窗口大小: {ClientSize.X} x {ClientSize.Y}");
+        ImGui.SameLine();
+        ImGui.Checkbox($"显示预览##{title}", ref previewEnabled);
 
         ImGui.Separator();
         ImGui.Text("预览:");
 
+        if (!previewEnabled)
+        {
+            ImGui.Text("预览已关闭");
+            return;
+        }
+
         if (previewTexture != 0 && previewWidth > 0 && previewHeight > 0)
         {
-            var available = ImGui.GetContentRegionAvail();
-            var scaleX = available.X / previewWidth;
-            var scaleY = available.Y / previewHeight;
-            var scale = MathF.Min(scaleX, scaleY);
-            scale = MathF.Min(scale, 1.0f);
-            scale = MathF.Max(scale, 0.1f);
-
-            var previewSize = new Vector2(previewWidth * scale, previewHeight * scale);
+            var previewSize = new Vector2(previewWidth, previewHeight);
             ImGui.Image((IntPtr)previewTexture, previewSize, new Vector2(0, 0), new Vector2(1, 1));
         }
         else
         {
             ImGui.Text("暂无画面");
         }
-    }
-
-    private void OnStartWgcClicked()
-    {
-        StartWgcCapture();
-    }
-
-    private void OnStopWgcClicked()
-    {
-        StopWgcCapture("已停止");
     }
 
     private void OnStartDxgiClicked()
@@ -253,111 +383,6 @@ public sealed class DemoWindow : GameWindow
     private void OnStopDxgiClicked()
     {
         StopDxgiCapture("已停止");
-    }
-
-    private void StartWgcCapture()
-    {
-        try
-        {
-            StopWgcCapture("重启捕获");
-            _wgcWorker = new WgcCaptureWorker();
-            _wgcStatus = "捕获中";
-            _wgcPerfStats.Reset();
-            _wgcPerfSnapshot = default;
-            _wgcLastPreviewFrameId = 0;
-            _wgcPreviewRefreshAccumulatorMs = 0.0;
-        }
-        catch (Exception ex)
-        {
-            _wgcStatus = $"启动失败: {ex.Message}";
-            _wgcWorker = null;
-        }
-    }
-
-    private void StopWgcCapture(string status)
-    {
-        _wgcWorker?.Dispose();
-        _wgcWorker = null;
-        _wgcStatus = status;
-        _wgcPreviewRefreshAccumulatorMs = 0.0;
-        _wgcLastPreviewFrameId = 0;
-        _wgcUploadBuffer = Array.Empty<byte>();
-        _wgcPreviewWidth = 0;
-        _wgcPreviewHeight = 0;
-        if (_wgcPreviewTexture != 0)
-        {
-            GL.DeleteTexture(_wgcPreviewTexture);
-            _wgcPreviewTexture = 0;
-        }
-    }
-
-    private void UpdateWgcPreview(float frameDeltaSeconds)
-    {
-        if (_wgcWorker is null)
-        {
-            return;
-        }
-
-        _wgcPreviewRefreshAccumulatorMs += Math.Max(frameDeltaSeconds, 0f) * 1000.0;
-        if (_wgcPreviewRefreshAccumulatorMs < 20.0)
-        {
-            return;
-        }
-        _wgcPreviewRefreshAccumulatorMs = 0.0;
-
-        if (_wgcWorker.TryCopyLatestFrame(ref _wgcUploadBuffer, ref _wgcLastPreviewFrameId, out var width, out var height, out var error))
-        {
-            EnsureWgcPreviewTexture(width, height);
-            GL.BindTexture(TextureTarget.Texture2D, _wgcPreviewTexture);
-            GL.TexSubImage2D(
-                TextureTarget.Texture2D,
-                0,
-                0,
-                0,
-                width,
-                height,
-                OpenTK.Graphics.OpenGL4.PixelFormat.Bgra,
-                PixelType.UnsignedByte,
-                _wgcUploadBuffer);
-        }
-        else if (!string.IsNullOrWhiteSpace(error))
-        {
-            StopWgcCapture($"捕获错误: {error}");
-        }
-    }
-
-    private void EnsureWgcPreviewTexture(int width, int height)
-    {
-        if (_wgcPreviewTexture != 0 && width == _wgcPreviewWidth && height == _wgcPreviewHeight)
-        {
-            return;
-        }
-
-        if (_wgcPreviewTexture != 0)
-        {
-            GL.DeleteTexture(_wgcPreviewTexture);
-            _wgcPreviewTexture = 0;
-        }
-
-        _wgcPreviewTexture = GL.GenTexture();
-        GL.BindTexture(TextureTarget.Texture2D, _wgcPreviewTexture);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-        GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-        GL.TexImage2D(
-            TextureTarget.Texture2D,
-            0,
-            PixelInternalFormat.Rgba,
-            width,
-            height,
-            0,
-            OpenTK.Graphics.OpenGL4.PixelFormat.Bgra,
-            PixelType.UnsignedByte,
-            IntPtr.Zero);
-
-        _wgcPreviewWidth = width;
-        _wgcPreviewHeight = height;
     }
 
     private void StartDxgiCapture()
@@ -487,13 +512,8 @@ public sealed class DemoWindow : GameWindow
 
     protected override void OnUnload()
     {
-        StopWgcCapture("已释放");
+        StopOnnxInference("已释放");
         StopDxgiCapture("已释放");
-        if (_wgcPreviewTexture != 0)
-        {
-            GL.DeleteTexture(_wgcPreviewTexture);
-            _wgcPreviewTexture = 0;
-        }
         if (_dxgiPreviewTexture != 0)
         {
             GL.DeleteTexture(_dxgiPreviewTexture);
@@ -615,7 +635,7 @@ internal sealed class RealtimePerfStats
 
         var capturePollHz = _capturePollCount / _windowSeconds;
         var capturedFps = _captureSuccessCount / _windowSeconds;
-        var avgCaptureMs = _capturePollCount > 0 ? _captureMsSum / _capturePollCount : 0.0;
+        var avgCaptureMs = _captureSuccessCount > 0 ? _captureMsSum / _captureSuccessCount : 0.0;
         var p95CaptureMs = Percentile(_captureMsSamples, 0.95);
         var p99CaptureMs = Percentile(_captureMsSamples, 0.99);
         var successRate = _capturePollCount > 0
@@ -671,6 +691,52 @@ internal readonly struct CaptureTelemetry
     }
 }
 
+internal static class RuntimePerformance
+{
+    private static string _dxgiGpuPriorityStatus = "未初始化";
+
+    public static string DxgiGpuPriorityStatus => _dxgiGpuPriorityStatus;
+
+    public static void ConfigureProcessPriority()
+    {
+        try
+        {
+            Process.GetCurrentProcess().PriorityClass = ProcessPriorityClass.High;
+        }
+        catch
+        {
+            // Ignore when the OS policy/user permissions do not allow elevating priority.
+        }
+    }
+
+    public static string GetProcessPriorityText()
+    {
+        try
+        {
+            return Process.GetCurrentProcess().PriorityClass.ToString();
+        }
+        catch (Exception ex)
+        {
+            return $"读取失败: {ex.GetType().Name}";
+        }
+    }
+
+    public static void TrySetGpuThreadPriority(ID3D11Device device, int priority)
+    {
+        try
+        {
+            using var dxgiDevice = device.QueryInterface<IDXGIDevice>();
+            dxgiDevice.SetGPUThreadPriority(priority).CheckError();
+            dxgiDevice.GetGPUThreadPriority(out var actual).CheckError();
+            _dxgiGpuPriorityStatus = $"已设置 ({actual})";
+        }
+        catch (Exception ex)
+        {
+            _dxgiGpuPriorityStatus = $"未生效: {ex.GetType().Name}";
+        }
+    }
+}
+
 internal sealed class DesktopCaptureWorker : IDisposable
 {
     private readonly object _sync = new();
@@ -687,6 +753,8 @@ internal sealed class DesktopCaptureWorker : IDisposable
     private double _captureMsSum;
     private double _captureMsMax;
     private readonly Queue<double> _pendingCaptureMs = new();
+    private int _requestedCaptureWidth = 320;
+    private int _requestedCaptureHeight = 320;
 
     public DesktopCaptureWorker()
     {
@@ -741,6 +809,15 @@ internal sealed class DesktopCaptureWorker : IDisposable
         }
     }
 
+    public void SetCaptureRegion(int width, int height)
+    {
+        lock (_sync)
+        {
+            _requestedCaptureWidth = Math.Max(1, width);
+            _requestedCaptureHeight = Math.Max(1, height);
+        }
+    }
+
     private void CaptureThreadMain()
     {
         try
@@ -750,21 +827,31 @@ internal sealed class DesktopCaptureWorker : IDisposable
 
             while (_running)
             {
+                int requestedWidth;
+                int requestedHeight;
+                lock (_sync)
+                {
+                    requestedWidth = _requestedCaptureWidth;
+                    requestedHeight = _requestedCaptureHeight;
+                }
+
+                duplicator.SetCaptureRegion(requestedWidth, requestedHeight);
                 timer.Restart();
                 var ok = duplicator.TryCaptureFrame(1, out var frameData, out var width, out var height, out var error);
                 timer.Stop();
+                var shouldBackoff = false;
 
                 lock (_sync)
                 {
                     _pollCount++;
                     var elapsedMs = timer.Elapsed.TotalMilliseconds;
-                    _captureMsSum += elapsedMs;
-                    _captureMsMax = Math.Max(_captureMsMax, elapsedMs);
-                    _pendingCaptureMs.Enqueue(elapsedMs);
 
                     if (ok)
                     {
                         _successCount++;
+                        _captureMsSum += elapsedMs;
+                        _captureMsMax = Math.Max(_captureMsMax, elapsedMs);
+                        _pendingCaptureMs.Enqueue(elapsedMs);
                         if (_latestFrame.Length != frameData.Length)
                         {
                             _latestFrame = new byte[frameData.Length];
@@ -780,6 +867,15 @@ internal sealed class DesktopCaptureWorker : IDisposable
                         _lastError = error;
                         _running = false;
                     }
+                    else
+                    {
+                        shouldBackoff = true;
+                    }
+                }
+
+                if (shouldBackoff)
+                {
+                    Thread.Sleep(1);
                 }
             }
         }
@@ -787,7 +883,7 @@ internal sealed class DesktopCaptureWorker : IDisposable
         {
             lock (_sync)
             {
-                _lastError = ex.Message;
+                _lastError = $"{ex.GetType().Name}: {ex.Message}";
                 _running = false;
             }
         }
@@ -801,384 +897,6 @@ internal sealed class DesktopCaptureWorker : IDisposable
             _thread.Join(300);
         }
     }
-}
-
-internal sealed class WgcCaptureWorker : IDisposable
-{
-    private readonly object _sync = new();
-    private readonly Thread _thread;
-    private bool _running = true;
-    private byte[] _latestFrame = Array.Empty<byte>();
-    private int _latestWidth;
-    private int _latestHeight;
-    private int _latestFrameId;
-    private string? _lastError;
-
-    private long _pollCount;
-    private long _successCount;
-    private double _captureMsSum;
-    private double _captureMsMax;
-    private readonly Queue<double> _pendingCaptureMs = new();
-
-    public WgcCaptureWorker()
-    {
-        _thread = new Thread(CaptureThreadMain)
-        {
-            IsBackground = true,
-            Name = "WGC-Capture-Worker"
-        };
-        _thread.Start();
-    }
-
-    public bool TryCopyLatestFrame(ref byte[] uploadBuffer, ref int lastFrameId, out int width, out int height, out string? error)
-    {
-        lock (_sync)
-        {
-            error = _lastError;
-            width = _latestWidth;
-            height = _latestHeight;
-
-            if (_latestFrameId == 0 || _latestFrameId == lastFrameId)
-            {
-                return false;
-            }
-
-            if (uploadBuffer.Length != _latestFrame.Length)
-            {
-                uploadBuffer = new byte[_latestFrame.Length];
-            }
-
-            System.Buffer.BlockCopy(_latestFrame, 0, uploadBuffer, 0, _latestFrame.Length);
-            lastFrameId = _latestFrameId;
-            return true;
-        }
-    }
-
-    public CaptureTelemetry GetTelemetrySnapshot()
-    {
-        lock (_sync)
-        {
-            return new CaptureTelemetry(_pollCount, _successCount, _captureMsSum, _captureMsMax);
-        }
-    }
-
-    public void DrainCaptureSamples(List<double> destination)
-    {
-        lock (_sync)
-        {
-            while (_pendingCaptureMs.Count > 0)
-            {
-                destination.Add(_pendingCaptureMs.Dequeue());
-            }
-        }
-    }
-
-    private void CaptureThreadMain()
-    {
-        try
-        {
-            using var capturer = new WgcPrimaryMonitorCapturer();
-            var timer = Stopwatch.StartNew();
-
-            while (_running)
-            {
-                timer.Restart();
-                var ok = capturer.TryCaptureFrame(out var frameData, out var width, out var height, out var error);
-                timer.Stop();
-
-                lock (_sync)
-                {
-                    _pollCount++;
-                    var elapsedMs = timer.Elapsed.TotalMilliseconds;
-                    _captureMsSum += elapsedMs;
-                    _captureMsMax = Math.Max(_captureMsMax, elapsedMs);
-                    _pendingCaptureMs.Enqueue(elapsedMs);
-
-                    if (ok)
-                    {
-                        _successCount++;
-                        if (_latestFrame.Length != frameData.Length)
-                        {
-                            _latestFrame = new byte[frameData.Length];
-                        }
-
-                        System.Buffer.BlockCopy(frameData, 0, _latestFrame, 0, frameData.Length);
-                        _latestWidth = width;
-                        _latestHeight = height;
-                        _latestFrameId++;
-                    }
-                    else if (!string.IsNullOrWhiteSpace(error))
-                    {
-                        _lastError = error;
-                        _running = false;
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            lock (_sync)
-            {
-                _lastError = ex.Message;
-                _running = false;
-            }
-        }
-    }
-
-    public void Dispose()
-    {
-        _running = false;
-        if (_thread.IsAlive)
-        {
-            _thread.Join(300);
-        }
-    }
-}
-
-internal sealed class WgcPrimaryMonitorCapturer : IDisposable
-{
-    private readonly ID3D11Device _device;
-    private readonly ID3D11DeviceContext _context;
-    private readonly ID3D11Texture2D _stagingTexture;
-    private readonly byte[] _frameBuffer;
-    private readonly GraphicsCaptureSession _session;
-    private readonly Direct3D11CaptureFramePool _framePool;
-    private readonly Queue<Direct3D11CaptureFrame> _frames = new();
-    private readonly object _framesLock = new();
-    private readonly int _width;
-    private readonly int _height;
-    private bool _disposed;
-
-    public WgcPrimaryMonitorCapturer()
-    {
-        if (!GraphicsCaptureSession.IsSupported())
-        {
-            throw new InvalidOperationException("Windows Graphics Capture is not supported on this system.");
-        }
-
-        _device = D3D11CreateDevice(DriverType.Hardware, DeviceCreationFlags.BgraSupport);
-        _context = _device.ImmediateContext;
-
-        var primaryMonitor = Win32Interop.MonitorFromPoint(new Win32Point(0, 0), 1);
-        if (primaryMonitor == IntPtr.Zero)
-        {
-            throw new InvalidOperationException("Failed to locate primary monitor.");
-        }
-
-        var item = Win32Interop.CreateItemForMonitor(primaryMonitor);
-        _width = item.Size.Width;
-        _height = item.Size.Height;
-        if (_width <= 0 || _height <= 0)
-        {
-            throw new InvalidOperationException("WGC target size is invalid.");
-        }
-
-        var dxgiDevice = _device.QueryInterface<IDXGIDevice>();
-        using (dxgiDevice)
-        {
-            var d3dDevice = Win32Interop.CreateDirect3DDevice(dxgiDevice.NativePointer);
-            _framePool = Direct3D11CaptureFramePool.CreateFreeThreaded(
-                d3dDevice,
-                DirectXPixelFormat.B8G8R8A8UIntNormalized,
-                2,
-                new Windows.Graphics.SizeInt32(_width, _height));
-        }
-
-        _session = _framePool.CreateCaptureSession(item);
-        _framePool.FrameArrived += OnFrameArrived;
-        _session.StartCapture();
-
-        var textureDesc = new Texture2DDescription
-        {
-            Width = (uint)_width,
-            Height = (uint)_height,
-            MipLevels = 1,
-            ArraySize = 1,
-            Format = Format.B8G8R8A8_UNorm,
-            SampleDescription = new SampleDescription(1, 0),
-            Usage = ResourceUsage.Staging,
-            BindFlags = BindFlags.None,
-            CPUAccessFlags = CpuAccessFlags.Read,
-            MiscFlags = ResourceOptionFlags.None
-        };
-        _stagingTexture = _device.CreateTexture2D(textureDesc);
-        _frameBuffer = new byte[_width * _height * 4];
-    }
-
-    private void OnFrameArrived(Direct3D11CaptureFramePool sender, object args)
-    {
-        var frame = sender.TryGetNextFrame();
-        if (frame is null)
-        {
-            return;
-        }
-
-        lock (_framesLock)
-        {
-            _frames.Enqueue(frame);
-            while (_frames.Count > 2)
-            {
-                _frames.Dequeue().Dispose();
-            }
-        }
-    }
-
-    public bool TryCaptureFrame(out byte[] frameData, out int width, out int height, out string? error)
-    {
-        frameData = Array.Empty<byte>();
-        width = 0;
-        height = 0;
-        error = null;
-
-        if (_disposed)
-        {
-            error = "WGC session disposed";
-            return false;
-        }
-
-        Direct3D11CaptureFrame? frame = null;
-        lock (_framesLock)
-        {
-            if (_frames.Count > 0)
-            {
-                frame = _frames.Dequeue();
-            }
-        }
-
-        if (frame is null)
-        {
-            return false;
-        }
-
-        using (frame)
-        {
-            var texture = Win32Interop.GetTexture2D(frame.Surface);
-            using (texture)
-            {
-                _context.CopyResource(_stagingTexture, texture);
-                _context.Map(_stagingTexture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None, out var mapped).CheckError();
-                try
-                {
-                    var rowBytes = _width * 4;
-                    for (var y = 0; y < _height; y++)
-                    {
-                        var source = new IntPtr(mapped.DataPointer + y * mapped.RowPitch);
-                        var destination = y * rowBytes;
-                        System.Runtime.InteropServices.Marshal.Copy(source, _frameBuffer, destination, rowBytes);
-                    }
-                }
-                finally
-                {
-                    _context.Unmap(_stagingTexture, 0);
-                }
-            }
-        }
-
-        frameData = _frameBuffer;
-        width = _width;
-        height = _height;
-        return true;
-    }
-
-    public void Dispose()
-    {
-        if (_disposed)
-        {
-            return;
-        }
-
-        _framePool.FrameArrived -= OnFrameArrived;
-        _session.Dispose();
-        _framePool.Dispose();
-        lock (_framesLock)
-        {
-            while (_frames.Count > 0)
-            {
-                _frames.Dequeue().Dispose();
-            }
-        }
-
-        _stagingTexture.Dispose();
-        _context.Dispose();
-        _device.Dispose();
-        _disposed = true;
-    }
-}
-
-internal static class Win32Interop
-{
-    private static readonly Guid GraphicsCaptureItemGuid = new("79C3F95B-31F7-4EC2-A464-632EF5D30760");
-    private static readonly Guid ID3D11Texture2DGuid = new("6f15aaf2-d208-4e89-9ab4-489535d34f9c");
-
-    public static IntPtr MonitorFromPoint(Win32Point point, uint flags)
-    {
-        return MonitorFromPointNative(point, flags);
-    }
-
-    public static GraphicsCaptureItem CreateItemForMonitor(IntPtr hMonitor)
-    {
-        using var factory = ActivationFactory.Get("Windows.Graphics.Capture.GraphicsCaptureItem");
-        using var interopRef = factory.As<IGraphicsCaptureItemInterop>(typeof(IGraphicsCaptureItemInterop).GUID);
-        var interop = (IGraphicsCaptureItemInterop)Marshal.GetObjectForIUnknown(interopRef.ThisPtr);
-        interop.CreateForMonitor(hMonitor, GraphicsCaptureItemGuid, out var resultPtr);
-        return MarshalInspectable<GraphicsCaptureItem>.FromAbi(resultPtr);
-    }
-
-    public static IDirect3DDevice CreateDirect3DDevice(IntPtr dxgiDevicePtr)
-    {
-        var hr = CreateDirect3D11DeviceFromDXGIDevice(dxgiDevicePtr, out var devicePtr);
-        if (hr < 0)
-        {
-            Marshal.ThrowExceptionForHR(hr);
-        }
-
-        return MarshalInspectable<IDirect3DDevice>.FromAbi(devicePtr);
-    }
-
-    public static ID3D11Texture2D GetTexture2D(IDirect3DSurface surface)
-    {
-        var access = surface.As<IDirect3DDxgiInterfaceAccess>();
-        access.GetInterface(ID3D11Texture2DGuid, out var texturePtr);
-        return new ID3D11Texture2D(texturePtr);
-    }
-
-    [DllImport("user32.dll")]
-    private static extern IntPtr MonitorFromPointNative(Win32Point pt, uint dwFlags);
-
-    [DllImport("d3d11.dll")]
-    private static extern int CreateDirect3D11DeviceFromDXGIDevice(
-        IntPtr dxgiDevice,
-        out IntPtr graphicsDevice);
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal struct Win32Point
-{
-    public int X;
-    public int Y;
-
-    public Win32Point(int x, int y)
-    {
-        X = x;
-        Y = y;
-    }
-}
-
-[ComImport]
-[System.Runtime.InteropServices.Guid("3628e81b-3cac-4c60-b7f4-23ce0e0c3356")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IGraphicsCaptureItemInterop
-{
-    void CreateForWindow(IntPtr window, [In] in Guid iid, out IntPtr result);
-    void CreateForMonitor(IntPtr monitor, [In] in Guid iid, out IntPtr result);
-}
-
-[ComImport]
-[System.Runtime.InteropServices.Guid("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1")]
-[InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
-internal interface IDirect3DDxgiInterfaceAccess
-{
-    void GetInterface([In] in Guid iid, out IntPtr result);
 }
 
 public sealed class ImGuiController : IDisposable
@@ -1550,9 +1268,14 @@ internal sealed class DxgiDesktopDuplicator : IDisposable
     private readonly ID3D11DeviceContext _context;
     private readonly IDXGIOutputDuplication _duplication;
     private readonly ID3D11Texture2D _stagingTexture;
-    private readonly byte[] _frameBuffer;
-    private readonly int _width;
-    private readonly int _height;
+    private byte[] _frameBuffer = Array.Empty<byte>();
+    private readonly object _regionLock = new();
+    private readonly int _outputWidth;
+    private readonly int _outputHeight;
+    private int _captureWidth;
+    private int _captureHeight;
+    private int _captureLeft;
+    private int _captureTop;
     private bool _disposed;
 
     public DxgiDesktopDuplicator()
@@ -1584,21 +1307,27 @@ internal sealed class DxgiDesktopDuplicator : IDisposable
                 {
                     _device = D3D11CreateDevice(DriverType.Hardware, DeviceCreationFlags.BgraSupport);
                     _context = _device.ImmediateContext;
+                    RuntimePerformance.TrySetGpuThreadPriority(_device, 7);
 
                     var outputDesc = output.Description;
-                    _width = outputDesc.DesktopCoordinates.Right - outputDesc.DesktopCoordinates.Left;
-                    _height = outputDesc.DesktopCoordinates.Bottom - outputDesc.DesktopCoordinates.Top;
-                    if (_width <= 0 || _height <= 0)
+                    var outputWidth = outputDesc.DesktopCoordinates.Right - outputDesc.DesktopCoordinates.Left;
+                    var outputHeight = outputDesc.DesktopCoordinates.Bottom - outputDesc.DesktopCoordinates.Top;
+                    if (outputWidth <= 0 || outputHeight <= 0)
                     {
                         throw new InvalidOperationException("DXGI output size is invalid.");
                     }
+
+                    _outputWidth = outputWidth;
+                    _outputHeight = outputHeight;
+                    SetCaptureRegion(320, 320);
 
                     _duplication = output1.DuplicateOutput(_device);
 
                     var textureDesc = new Texture2DDescription
                     {
-                        Width = (uint)_width,
-                        Height = (uint)_height,
+                        // CopyResource requires source/destination textures to have matching dimensions.
+                        Width = (uint)outputWidth,
+                        Height = (uint)outputHeight,
                         MipLevels = 1,
                         ArraySize = 1,
                         Format = Format.B8G8R8A8_UNorm,
@@ -1609,8 +1338,26 @@ internal sealed class DxgiDesktopDuplicator : IDisposable
                         MiscFlags = ResourceOptionFlags.None
                     };
                     _stagingTexture = _device.CreateTexture2D(textureDesc);
-                    _frameBuffer = new byte[_width * _height * 4];
                 }
+            }
+        }
+    }
+
+    public void SetCaptureRegion(int width, int height)
+    {
+        var clampedWidth = Math.Clamp(width, 1, _outputWidth);
+        var clampedHeight = Math.Clamp(height, 1, _outputHeight);
+
+        lock (_regionLock)
+        {
+            _captureWidth = clampedWidth;
+            _captureHeight = clampedHeight;
+            _captureLeft = (_outputWidth - _captureWidth) / 2;
+            _captureTop = (_outputHeight - _captureHeight) / 2;
+            var requiredBytes = _captureWidth * _captureHeight * 4;
+            if (_frameBuffer.Length != requiredBytes)
+            {
+                _frameBuffer = new byte[requiredBytes];
             }
         }
     }
@@ -1647,22 +1394,39 @@ internal sealed class DxgiDesktopDuplicator : IDisposable
             _context.Map(_stagingTexture, 0, MapMode.Read, Vortice.Direct3D11.MapFlags.None, out var mapped).CheckError();
             try
             {
-                var rowBytes = _width * 4;
-                for (var y = 0; y < _height; y++)
+                int captureWidth;
+                int captureHeight;
+                int captureLeft;
+                int captureTop;
+                byte[] frameBuffer;
+                lock (_regionLock)
                 {
-                    var source = new IntPtr(mapped.DataPointer + y * mapped.RowPitch);
-                    var destination = y * rowBytes;
-                    System.Runtime.InteropServices.Marshal.Copy(source, _frameBuffer, destination, rowBytes);
+                    captureWidth = _captureWidth;
+                    captureHeight = _captureHeight;
+                    captureLeft = _captureLeft;
+                    captureTop = _captureTop;
+                    frameBuffer = _frameBuffer;
                 }
+
+                var rowBytes = captureWidth * 4;
+                for (var y = 0; y < captureHeight; y++)
+                {
+                    var sourceY = captureTop + y;
+                    var sourceOffset = sourceY * mapped.RowPitch + captureLeft * 4;
+                    var source = new IntPtr(mapped.DataPointer + sourceOffset);
+                    var destination = y * rowBytes;
+                    System.Runtime.InteropServices.Marshal.Copy(source, frameBuffer, destination, rowBytes);
+                }
+
+                frameData = frameBuffer;
+                width = captureWidth;
+                height = captureHeight;
             }
             finally
             {
                 _context.Unmap(_stagingTexture, 0);
             }
 
-            frameData = _frameBuffer;
-            width = _width;
-            height = _height;
             return true;
         }
         catch (Exception ex)
@@ -1692,6 +1456,626 @@ internal sealed class DxgiDesktopDuplicator : IDisposable
         _context.Dispose();
         _device.Dispose();
         _disposed = true;
+    }
+}
+
+internal readonly struct OnnxModelConfig
+{
+    public readonly string DisplayName;
+    public readonly string JsonPath;
+    public readonly string OnnxPath;
+    public readonly int InputWidth;
+    public readonly int InputHeight;
+    public readonly float ConfThreshold;
+    public readonly float IouThreshold;
+    public readonly string ClassesRaw;
+    public readonly HashSet<int> AllowedClasses;
+
+    public OnnxModelConfig(
+        string displayName,
+        string jsonPath,
+        string onnxPath,
+        int inputWidth,
+        int inputHeight,
+        float confThreshold,
+        float iouThreshold,
+        string classesRaw,
+        HashSet<int> allowedClasses)
+    {
+        DisplayName = displayName;
+        JsonPath = jsonPath;
+        OnnxPath = onnxPath;
+        InputWidth = inputWidth;
+        InputHeight = inputHeight;
+        ConfThreshold = confThreshold;
+        IouThreshold = iouThreshold;
+        ClassesRaw = classesRaw;
+        AllowedClasses = allowedClasses;
+    }
+}
+
+internal static class OnnxModelConfigLoader
+{
+    public static List<OnnxModelConfig> LoadFromDirectory(string directory)
+    {
+        var result = new List<OnnxModelConfig>();
+        if (!Directory.Exists(directory))
+        {
+            return result;
+        }
+
+        foreach (var jsonPath in Directory.GetFiles(directory, "*.json", SearchOption.TopDirectoryOnly))
+        {
+            if (TryLoadSingle(jsonPath, out var model))
+            {
+                result.Add(model);
+            }
+        }
+
+        return result;
+    }
+
+    private static bool TryLoadSingle(string jsonPath, out OnnxModelConfig model)
+    {
+        model = default;
+        try
+        {
+            var onnxPath = Path.ChangeExtension(jsonPath, ".onnx");
+            if (!File.Exists(onnxPath))
+            {
+                return false;
+            }
+
+            using var doc = JsonDocument.Parse(File.ReadAllText(jsonPath));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("size", out var sizeEl))
+            {
+                return false;
+            }
+
+            var size = sizeEl.GetInt32();
+            if (size <= 0)
+            {
+                return false;
+            }
+
+            var conf = root.TryGetProperty("conf_thres", out var confEl) ? confEl.GetSingle() : 0.25f;
+            var iou = root.TryGetProperty("iou_thres", out var iouEl) ? iouEl.GetSingle() : 0.45f;
+            var classesRaw = root.TryGetProperty("classes", out var classesEl) ? classesEl.ToString() : string.Empty;
+            var allowed = ParseClasses(classesRaw);
+            model = new OnnxModelConfig(
+                Path.GetFileNameWithoutExtension(jsonPath),
+                jsonPath,
+                onnxPath,
+                size,
+                size,
+                conf,
+                iou,
+                classesRaw,
+                allowed);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static HashSet<int> ParseClasses(string raw)
+    {
+        var set = new HashSet<int>();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return set;
+        }
+
+        var parts = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        foreach (var part in parts)
+        {
+            if (int.TryParse(part, out var value))
+            {
+                set.Add(value);
+            }
+        }
+
+        return set;
+    }
+}
+
+internal readonly struct OnnxInferenceSnapshot
+{
+    public readonly string Status;
+    public readonly double InferenceFps;
+    public readonly double AvgInferenceMs;
+    public readonly double P95InferenceMs;
+    public readonly double P99InferenceMs;
+    public readonly int DetectionCount;
+    public readonly string OutputSummary;
+
+    public OnnxInferenceSnapshot(
+        string status,
+        double inferenceFps,
+        double avgInferenceMs,
+        double p95InferenceMs,
+        double p99InferenceMs,
+        int detectionCount,
+        string outputSummary)
+    {
+        Status = status;
+        InferenceFps = inferenceFps;
+        AvgInferenceMs = avgInferenceMs;
+        P95InferenceMs = p95InferenceMs;
+        P99InferenceMs = p99InferenceMs;
+        DetectionCount = detectionCount;
+        OutputSummary = outputSummary;
+    }
+}
+
+internal sealed class OnnxDmlWorker : IDisposable
+{
+    private readonly object _sync = new();
+    private readonly Thread _thread;
+    private readonly AutoResetEvent _frameArrived = new(false);
+    private readonly OnnxModelConfig _model;
+
+    private bool _running = true;
+    private byte[] _latestFrame = Array.Empty<byte>();
+    private int _latestFrameWidth;
+    private int _latestFrameHeight;
+    private int _latestFrameId;
+    private int _lastProcessedFrameId;
+
+    private readonly List<double> _windowSamples = new(256);
+    private DateTime _windowStartUtc = DateTime.UtcNow;
+    private long _windowInferenceCount;
+
+    private OnnxInferenceSnapshot _snapshot = new(
+        "未启动",
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0,
+        "无");
+
+    public OnnxDmlWorker(OnnxModelConfig model)
+    {
+        _model = model;
+        _thread = new Thread(WorkerMain)
+        {
+            IsBackground = true,
+            Name = "ONNX-DML-Worker"
+        };
+        _thread.Start();
+    }
+
+    public void SubmitFrame(byte[] frameData, int width, int height, int frameId)
+    {
+        lock (_sync)
+        {
+            if (!_running)
+            {
+                return;
+            }
+
+            if (_latestFrame.Length != frameData.Length)
+            {
+                _latestFrame = new byte[frameData.Length];
+            }
+
+            System.Buffer.BlockCopy(frameData, 0, _latestFrame, 0, frameData.Length);
+            _latestFrameWidth = width;
+            _latestFrameHeight = height;
+            _latestFrameId = frameId;
+        }
+
+        _frameArrived.Set();
+    }
+
+    public OnnxInferenceSnapshot GetSnapshot()
+    {
+        lock (_sync)
+        {
+            return _snapshot;
+        }
+    }
+
+    private void WorkerMain()
+    {
+        try
+        {
+            using var options = new SessionOptions();
+            options.AppendExecutionProvider_DML();
+            using var session = new InferenceSession(_model.OnnxPath, options);
+
+            var input = session.InputMetadata.First();
+            var inputName = input.Key;
+            var inputDims = ResolveInputShape(input.Value.Dimensions, _model.InputHeight, _model.InputWidth);
+            var layout = DetectLayout(inputDims);
+
+            SetStatus("推理中");
+            while (_running)
+            {
+                _frameArrived.WaitOne(50);
+                if (!_running)
+                {
+                    break;
+                }
+
+                byte[] frame;
+                int frameWidth;
+                int frameHeight;
+                int frameId;
+                lock (_sync)
+                {
+                    if (_latestFrameId == 0 || _latestFrameId == _lastProcessedFrameId)
+                    {
+                        continue;
+                    }
+
+                    frame = new byte[_latestFrame.Length];
+                    System.Buffer.BlockCopy(_latestFrame, 0, frame, 0, _latestFrame.Length);
+                    frameWidth = _latestFrameWidth;
+                    frameHeight = _latestFrameHeight;
+                    frameId = _latestFrameId;
+                    _lastProcessedFrameId = frameId;
+                }
+
+                var sw = Stopwatch.StartNew();
+                var inputData = Preprocess(frame, frameWidth, frameHeight, _model.InputWidth, _model.InputHeight, layout);
+                var inputTensor = new DenseTensor<float>(inputData, inputDims);
+                using var outputs = session.Run(new[] { NamedOnnxValue.CreateFromTensor(inputName, inputTensor) });
+                sw.Stop();
+
+                var outputSummary = BuildOutputSummary(outputs);
+                var detectionCount = CountDetections(outputs, _model.ConfThreshold, _model.IouThreshold, _model.AllowedClasses);
+                PushInferenceSample(sw.Elapsed.TotalMilliseconds, detectionCount, outputSummary);
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"推理失败: {ex.GetType().Name}: {ex.Message}");
+            _running = false;
+        }
+    }
+
+    private void SetStatus(string status)
+    {
+        lock (_sync)
+        {
+            _snapshot = new OnnxInferenceSnapshot(
+                status,
+                _snapshot.InferenceFps,
+                _snapshot.AvgInferenceMs,
+                _snapshot.P95InferenceMs,
+                _snapshot.P99InferenceMs,
+                _snapshot.DetectionCount,
+                _snapshot.OutputSummary);
+        }
+    }
+
+    private void PushInferenceSample(double ms, int detectionCount, string outputSummary)
+    {
+        lock (_sync)
+        {
+            _windowSamples.Add(ms);
+            _windowInferenceCount++;
+            var elapsed = DateTime.UtcNow - _windowStartUtc;
+            if (elapsed.TotalSeconds >= 1.0)
+            {
+                var fps = _windowInferenceCount / elapsed.TotalSeconds;
+                var avg = _windowSamples.Count > 0 ? _windowSamples.Average() : 0.0;
+                var p95 = Percentile(_windowSamples, 0.95);
+                var p99 = Percentile(_windowSamples, 0.99);
+                _snapshot = new OnnxInferenceSnapshot("推理中", fps, avg, p95, p99, detectionCount, outputSummary);
+                _windowSamples.Clear();
+                _windowInferenceCount = 0;
+                _windowStartUtc = DateTime.UtcNow;
+            }
+            else
+            {
+                _snapshot = new OnnxInferenceSnapshot(
+                    _snapshot.Status,
+                    _snapshot.InferenceFps,
+                    _snapshot.AvgInferenceMs,
+                    _snapshot.P95InferenceMs,
+                    _snapshot.P99InferenceMs,
+                    detectionCount,
+                    outputSummary);
+            }
+        }
+    }
+
+    private static int[] ResolveInputShape(IReadOnlyList<int> dims, int height, int width)
+    {
+        var resolved = dims.Select(d => d <= 0 ? 1 : d).ToArray();
+        if (resolved.Length != 4)
+        {
+            return new[] { 1, 3, height, width };
+        }
+
+        if (resolved[1] == 3 || resolved[1] == 1)
+        {
+            resolved[0] = 1;
+            resolved[2] = height;
+            resolved[3] = width;
+            return resolved;
+        }
+
+        resolved[0] = 1;
+        resolved[1] = height;
+        resolved[2] = width;
+        resolved[3] = 3;
+        return resolved;
+    }
+
+    private static string DetectLayout(int[] dims)
+    {
+        if (dims.Length == 4 && dims[1] is 1 or 3)
+        {
+            return "NCHW";
+        }
+
+        return "NHWC";
+    }
+
+    private static float[] Preprocess(byte[] bgra, int srcW, int srcH, int dstW, int dstH, string layout)
+    {
+        var data = new float[dstW * dstH * 3];
+        for (var y = 0; y < dstH; y++)
+        {
+            var sy = y * srcH / dstH;
+            for (var x = 0; x < dstW; x++)
+            {
+                var sx = x * srcW / dstW;
+                var srcIndex = (sy * srcW + sx) * 4;
+                var b = bgra[srcIndex + 0] / 255f;
+                var g = bgra[srcIndex + 1] / 255f;
+                var r = bgra[srcIndex + 2] / 255f;
+
+                if (layout == "NCHW")
+                {
+                    var pixel = y * dstW + x;
+                    data[pixel] = r;
+                    data[dstW * dstH + pixel] = g;
+                    data[2 * dstW * dstH + pixel] = b;
+                }
+                else
+                {
+                    var pixel = (y * dstW + x) * 3;
+                    data[pixel + 0] = r;
+                    data[pixel + 1] = g;
+                    data[pixel + 2] = b;
+                }
+            }
+        }
+
+        return data;
+    }
+
+    private static string BuildOutputSummary(IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs)
+    {
+        var parts = new List<string>();
+        foreach (var output in outputs.Take(3))
+        {
+            try
+            {
+                var tensor = output.AsTensor<float>();
+                var shape = string.Join("x", tensor.Dimensions.ToArray().Select(d => d.ToString()));
+                parts.Add($"{output.Name}:{shape}");
+            }
+            catch
+            {
+                parts.Add($"{output.Name}:non-float");
+            }
+        }
+
+        return parts.Count == 0 ? "无输出" : string.Join(", ", parts);
+    }
+
+    private static int CountDetections(
+        IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs,
+        float confThres,
+        float iouThres,
+        HashSet<int> allowedClasses)
+    {
+        foreach (var output in outputs)
+        {
+            Tensor<float>? tensor;
+            try
+            {
+                tensor = output.AsTensor<float>();
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (tensor.Rank != 3)
+            {
+                continue;
+            }
+
+            var dims = tensor.Dimensions.ToArray();
+            var values = tensor.ToArray();
+            if (TryParseDetections(values, dims, confThres, iouThres, allowedClasses, out var count))
+            {
+                return count;
+            }
+        }
+
+        return 0;
+    }
+
+    private static bool TryParseDetections(
+        float[] values,
+        int[] dims,
+        float confThres,
+        float iouThres,
+        HashSet<int> allowedClasses,
+        out int count)
+    {
+        count = 0;
+        if (dims.Length != 3)
+        {
+            return false;
+        }
+
+        int rows;
+        int cols;
+        bool transposed;
+        if (dims[2] >= 6)
+        {
+            rows = dims[1];
+            cols = dims[2];
+            transposed = false;
+        }
+        else if (dims[1] >= 6)
+        {
+            rows = dims[2];
+            cols = dims[1];
+            transposed = true;
+        }
+        else
+        {
+            return false;
+        }
+
+        var boxes = new List<(float x, float y, float w, float h, float score)>();
+        for (var i = 0; i < rows; i++)
+        {
+            int baseIndex;
+            if (!transposed)
+            {
+                baseIndex = i * cols;
+            }
+            else
+            {
+                baseIndex = i;
+            }
+
+            float Read(int c) => !transposed ? values[baseIndex + c] : values[c * rows + baseIndex];
+
+            var obj = Read(4);
+            if (obj <= 0f)
+            {
+                continue;
+            }
+
+            var bestClassScore = 0f;
+            var bestClass = -1;
+            for (var c = 5; c < cols; c++)
+            {
+                var cls = Read(c);
+                if (cls > bestClassScore)
+                {
+                    bestClassScore = cls;
+                    bestClass = c - 5;
+                }
+            }
+
+            if (bestClass >= 0 && allowedClasses.Count > 0 && !allowedClasses.Contains(bestClass))
+            {
+                continue;
+            }
+
+            var score = obj * bestClassScore;
+            if (score < confThres)
+            {
+                continue;
+            }
+
+            boxes.Add((Read(0), Read(1), Math.Abs(Read(2)), Math.Abs(Read(3)), score));
+        }
+
+        if (boxes.Count == 0)
+        {
+            return true;
+        }
+
+        boxes.Sort((a, b) => b.score.CompareTo(a.score));
+        var kept = new List<(float x, float y, float w, float h, float score)>();
+        foreach (var box in boxes)
+        {
+            var suppressed = false;
+            foreach (var keptBox in kept)
+            {
+                if (ComputeIoU(box, keptBox) > iouThres)
+                {
+                    suppressed = true;
+                    break;
+                }
+            }
+
+            if (!suppressed)
+            {
+                kept.Add(box);
+            }
+        }
+
+        count = kept.Count;
+        return true;
+    }
+
+    private static float ComputeIoU(
+        (float x, float y, float w, float h, float score) a,
+        (float x, float y, float w, float h, float score) b)
+    {
+        var ax1 = a.x - a.w * 0.5f;
+        var ay1 = a.y - a.h * 0.5f;
+        var ax2 = a.x + a.w * 0.5f;
+        var ay2 = a.y + a.h * 0.5f;
+
+        var bx1 = b.x - b.w * 0.5f;
+        var by1 = b.y - b.h * 0.5f;
+        var bx2 = b.x + b.w * 0.5f;
+        var by2 = b.y + b.h * 0.5f;
+
+        var interX1 = Math.Max(ax1, bx1);
+        var interY1 = Math.Max(ay1, by1);
+        var interX2 = Math.Min(ax2, bx2);
+        var interY2 = Math.Min(ay2, by2);
+        var interW = Math.Max(0f, interX2 - interX1);
+        var interH = Math.Max(0f, interY2 - interY1);
+        var interArea = interW * interH;
+        var union = a.w * a.h + b.w * b.h - interArea;
+        if (union <= 0f)
+        {
+            return 0f;
+        }
+
+        return interArea / union;
+    }
+
+    private static double Percentile(List<double> values, double percentile)
+    {
+        if (values.Count == 0)
+        {
+            return 0.0;
+        }
+
+        values.Sort();
+        var rank = percentile * (values.Count - 1);
+        var low = (int)Math.Floor(rank);
+        var high = (int)Math.Ceiling(rank);
+        if (low == high)
+        {
+            return values[low];
+        }
+
+        var weight = rank - low;
+        return values[low] * (1.0 - weight) + values[high] * weight;
+    }
+
+    public void Dispose()
+    {
+        _running = false;
+        _frameArrived.Set();
+        if (_thread.IsAlive)
+        {
+            _thread.Join(500);
+        }
+        _frameArrived.Dispose();
     }
 }
 
