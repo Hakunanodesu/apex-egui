@@ -1,3 +1,7 @@
+# build.rs 生成到 src/build/，不纳入版本库；保留目录用 .gitkeep
+/src/build/*
+!/src/build/.gitkeep
+
 /.cursor
 /target
 /plans
