@@ -178,13 +178,6 @@ pub mod paths {
     pub const VIGEMBUS_INSTALL_DIR: &str = "C:/Program Files/Nefarius Software Solutions/ViGEm Bus Driver";
 }
 
-/// 构建脚本（build.rs）相关常量
-#[allow(dead_code)]
-pub mod build {
-    /// 生成 exe 图标时写入的 ico 尺寸
-    pub const ICON_SIZES: &[u32] = &[16, 32, 48, 256];
-}
-
 // 由 build.rs 扫描 gun_templates 生成，与 weapon_rec 嵌入模板列表一致
-include!("build/rapid_fire_weapon_stems.rs");
+include!(concat!(env!("OUT_DIR"), "/rapid_fire_weapon_stems.rs"));
 

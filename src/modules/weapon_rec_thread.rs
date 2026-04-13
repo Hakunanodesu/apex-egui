@@ -2,7 +2,7 @@
 //! 模板图片在编译时通过 build.rs 嵌入二进制，无需运行时 gun_templates 目录。
 //! 约束（非常重要）：模板文件被视为“最终特征图”，禁止再对模板做 Sobel/Canny/dilate/拉伸等二次处理。
 
-include!("../build/gun_templates.rs");
+include!(concat!(env!("OUT_DIR"), "/gun_templates.rs"));
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};

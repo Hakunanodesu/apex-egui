@@ -5,21 +5,19 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-#[allow(dead_code)]
-mod shared_constants {
-    include!("src/shared_constants.rs");
-}
-use shared_constants::build::ICON_SIZES;
-use shared_constants::weapon_rec::{TEMPLATE_H, TEMPLATE_W};
+// 与 `src/shared_constants.rs` 里 `weapon_rec` / `build` 保持一致。
+// 不能 `include!("src/shared_constants.rs")`：该文件末尾会 `include!` 生成的 stems 列表，
+// 而此文件由本脚本写入 OUT_DIR，若在编译 build.rs 时展开 shared_constants 会形成循环依赖。
+const TEMPLATE_W: u32 = 160;
+const TEMPLATE_H: u32 = 40;
+const ICON_SIZES: &[u32] = &[16, 32, 48, 256];
 
 fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let template_dir = Path::new(&manifest_dir).join("gun_templates");
     let out_dir = env::var("OUT_DIR").expect("OUT_DIR");
-    // 生成的模板表写到源码目录，方便用相对路径 include!，避免依赖编译期的 OUT_DIR 环境变量。
-    let build_dir = Path::new(&manifest_dir).join("src").join("build");
-    let src_out_path = build_dir.join("gun_templates.rs");
-    fs::create_dir_all(&build_dir).expect("创建 src/build 目录失败");
+    // 生成到 OUT_DIR（target/.../out），由 Cargo 保证先于主 crate 编译写出；无需在仓库里保留生成文件。
+    let src_out_path = Path::new(&out_dir).join("gun_templates.rs");
 
     let mut entries: Vec<(String, u32, u32, Vec<u8>)> = Vec::new(); // (stem, width, height, gray_raw)
     let mut size_errors: Vec<String> = Vec::new();
@@ -109,7 +107,7 @@ fn main() {
     fs::write(&src_out_path, code).expect("写入 gun_templates.rs 失败");
 
     // 与嵌入模板同源：供 UI「特殊枪械」与连点白名单使用（编译期固定，不依赖运行时目录）
-    let stems_out = build_dir.join("rapid_fire_weapon_stems.rs");
+    let stems_out = Path::new(&out_dir).join("rapid_fire_weapon_stems.rs");
     let mut stems_code = String::from(
         "// 由 build.rs 自动生成，请勿手改\n\n\
          /// 连点 / 特殊枪械 UI：与 `gun_templates` 中已通过尺寸校验并嵌入的模板名（无后缀）一致\n\
