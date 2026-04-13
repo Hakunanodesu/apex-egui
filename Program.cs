@@ -57,6 +57,11 @@ public sealed class DemoWindow : GameWindow
     private int _onnxDebugSelectedModelIndex;
     private readonly List<string> _configFiles = new();
     private int _selectedConfigFileIndex;
+    private string _addConfigNameBuffer = string.Empty;
+    private string _configAddModalError = string.Empty;
+    private bool _configAddModalOpen;
+    private bool _configDeleteModalOpen;
+    private bool _smartCoreEnabled;
     private OnnxDmlWorker? _onnxWorker;
     private string _onnxStatus = "未启动";
     private OnnxInferenceSnapshot _onnxSnapshot;
@@ -130,7 +135,6 @@ public sealed class DemoWindow : GameWindow
             ImGuiWindowFlags.NoCollapse;
 
         ImGui.Begin("MainOverlay", windowFlags);
-        DrawTopPanel();
 
         if (ImGui.BeginTabBar("RootTabs"))
         {
@@ -152,33 +156,6 @@ public sealed class DemoWindow : GameWindow
         ImGui.End();
     }
 
-    private void DrawTopPanel()
-    {
-        var vigemReady = Directory.Exists(@"C:\Program Files\Nefarius Software Solutions");
-        ImGui.TextUnformatted("ViGemBus");
-        ImGui.SameLine();
-        if (vigemReady)
-        {
-            ImGui.TextColored(new Vector4(0.18f, 0.78f, 0.29f, 1f), "已就绪");
-        }
-        else
-        {
-            ImGui.TextColored(new Vector4(0.86f, 0.24f, 0.24f, 1f), "未就绪");
-        }
-        ImGui.SameLine();
-        var vigemActionLabel = vigemReady ? "重新安装" : "安装";
-        if (ImGui.Button(vigemActionLabel))
-        {
-            OpenViGemBusInstaller();
-        }
-
-        ImGui.Separator();
-
-        ImGui.TextUnformatted("配置");
-        ImGui.SameLine();
-        DrawConfigFileCombo("##TopConfigCombo");
-    }
-
     private static void OpenViGemBusInstaller()
     {
         try
@@ -198,7 +175,85 @@ public sealed class DemoWindow : GameWindow
 
     private void DrawHomeTab()
     {
-        ImGui.Text("模型");
+        var vigemReady = Directory.Exists(@"C:\Program Files\Nefarius Software Solutions");
+        ImGui.TextUnformatted("ViGemBus");
+        ImGui.SameLine();
+        if (vigemReady)
+        {
+            ImGui.TextColored(new Vector4(0.18f, 0.78f, 0.29f, 1f), "已就绪");
+        }
+        else
+        {
+            ImGui.TextColored(new Vector4(0.86f, 0.24f, 0.24f, 1f), "未就绪");
+        }
+        ImGui.SameLine();
+        var vigemActionLabel = vigemReady ? "重新安装" : "安装";
+        if (ImGui.Button(vigemActionLabel))
+        {
+            OpenViGemBusInstaller();
+        }
+
+        // ImGui.Separator();
+
+        ImGui.TextUnformatted("选择配置");
+        ImGui.SameLine();
+        var topPanelStyle = ImGui.GetStyle();
+        var addButtonWidth = ImGui.CalcTextSize("添加").X + topPanelStyle.FramePadding.X * 2f;
+        var deleteButtonWidth = ImGui.CalcTextSize("删除").X + topPanelStyle.FramePadding.X * 2f;
+        var reserveWidth = addButtonWidth + deleteButtonWidth + topPanelStyle.ItemSpacing.X * 2f;
+        var comboWidth = MathF.Max(120f, ImGui.GetContentRegionAvail().X - reserveWidth);
+        DrawConfigFileCombo("##TopConfigCombo", comboWidth);
+        ImGui.SameLine();
+        if (ImGui.Button("添加", new Vector2(addButtonWidth, 0f)))
+        {
+            _addConfigNameBuffer = string.Empty;
+            _configAddModalError = string.Empty;
+            _configAddModalOpen = true;
+            ImGui.OpenPopup("添加配置");
+        }
+        ImGui.SameLine();
+        ImGui.PushStyleColor(ImGuiCol.Button, new Vector4(0.65f, 0.18f, 0.18f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.78f, 0.22f, 0.22f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.52f, 0.14f, 0.14f, 1f));
+        if (_configFiles.Count > 0)
+        {
+            if (ImGui.Button("删除", new Vector2(deleteButtonWidth, 0f)))
+            {
+                _configDeleteModalOpen = true;
+                ImGui.OpenPopup("删除配置确认");
+            }
+        }
+        else
+        {
+            ImGui.BeginDisabled();
+            ImGui.Button("删除", new Vector2(deleteButtonWidth, 0f));
+            ImGui.EndDisabled();
+        }
+        ImGui.PopStyleColor(3);
+
+        DrawConfigFileModals();
+
+        // ImGui.Separator();
+
+        var smartCoreWasEnabled = _smartCoreEnabled;
+        if (smartCoreWasEnabled)
+        {
+            ImGui.PushStyleColor(ImGuiCol.CheckMark, new Vector4(0.18f, 0.78f, 0.29f, 1f));
+            ImGui.PushStyleColor(ImGuiCol.FrameBg, new Vector4(0.12f, 0.55f, 0.24f, 1f));
+            ImGui.PushStyleColor(ImGuiCol.FrameBgHovered, new Vector4(0.16f, 0.65f, 0.30f, 1f));
+            ImGui.PushStyleColor(ImGuiCol.FrameBgActive, new Vector4(0.10f, 0.48f, 0.21f, 1f));
+        }
+
+        ImGui.Checkbox("智慧核心", ref _smartCoreEnabled);
+
+        if (smartCoreWasEnabled)
+        {
+            ImGui.PopStyleColor(4);
+        }
+
+        // ImGui.Separator();
+
+        ImGui.Text("选择模型");
         ImGui.SameLine();
         DrawOnnxModelCombo("##HomeModelCombo", ref _onnxTopSelectedModelIndex);
     }
@@ -312,21 +367,23 @@ public sealed class DemoWindow : GameWindow
         }
     }
 
-    private void DrawConfigFileCombo(string id)
+    private void DrawConfigFileCombo(string id, float width = -1f)
     {
+        var comboWidth = width > 0f ? width : -1f;
         if (_configFiles.Count == 0)
         {
             ImGui.BeginDisabled();
-            ImGui.SetNextItemWidth(-1);
+            ImGui.SetNextItemWidth(comboWidth);
             ImGui.Combo(id, ref _selectedConfigFileIndex, "无可用配置\0");
             ImGui.EndDisabled();
             return;
         }
 
-        _selectedConfigFileIndex = Math.Clamp(_selectedConfigFileIndex, 0, _configFiles.Count - 1);
+        var indexBeforeUi = Math.Clamp(_selectedConfigFileIndex, 0, _configFiles.Count - 1);
+        _selectedConfigFileIndex = indexBeforeUi;
         var selected = _configFiles[_selectedConfigFileIndex];
 
-        ImGui.SetNextItemWidth(-1);
+        ImGui.SetNextItemWidth(comboWidth);
         if (ImGui.BeginCombo(id, selected))
         {
             for (var i = 0; i < _configFiles.Count; i++)
@@ -345,12 +402,17 @@ public sealed class DemoWindow : GameWindow
 
             ImGui.EndCombo();
         }
+
+        if (_selectedConfigFileIndex != indexBeforeUi)
+        {
+            WriteCurrentConfigFileName(_configFiles[_selectedConfigFileIndex]);
+        }
     }
 
     private void RefreshOnnxModels()
     {
         _onnxModels.Clear();
-        var modelsDir = Path.Combine(AppContext.BaseDirectory, "Models");
+        var modelsDir = Path.Combine(ContentRootDirectory, "Models");
         _onnxModels.AddRange(OnnxModelConfigLoader.LoadFromDirectory(modelsDir));
 
         _onnxModels.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase));
@@ -358,31 +420,20 @@ public sealed class DemoWindow : GameWindow
         _onnxDebugSelectedModelIndex = Math.Clamp(_onnxDebugSelectedModelIndex, 0, Math.Max(0, _onnxModels.Count - 1));
     }
 
-    private void RefreshConfigFiles()
+    private void RefreshConfigFiles(string? forceSelectBaseName = null)
     {
         var oldSelection = _configFiles.Count > 0 && _selectedConfigFileIndex >= 0 && _selectedConfigFileIndex < _configFiles.Count
             ? _configFiles[_selectedConfigFileIndex]
             : null;
 
         _configFiles.Clear();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var searchRoots = new[]
+        var configsDir = Path.Combine(ContentRootDirectory, "Configs");
+        if (Directory.Exists(configsDir))
         {
-            Path.Combine(AppContext.BaseDirectory, "Configs"),
-            Path.Combine(Environment.CurrentDirectory, "Configs")
-        };
-
-        foreach (var root in searchRoots)
-        {
-            if (!Directory.Exists(root))
-            {
-                continue;
-            }
-
-            foreach (var jsonPath in Directory.EnumerateFiles(root, "*.json", SearchOption.TopDirectoryOnly))
+            foreach (var jsonPath in Directory.EnumerateFiles(configsDir, "*.json", SearchOption.TopDirectoryOnly))
             {
                 var fileName = Path.GetFileNameWithoutExtension(jsonPath);
-                if (!string.IsNullOrWhiteSpace(fileName) && seen.Add(fileName))
+                if (!string.IsNullOrWhiteSpace(fileName))
                 {
                     _configFiles.Add(fileName);
                 }
@@ -393,7 +444,19 @@ public sealed class DemoWindow : GameWindow
         if (_configFiles.Count == 0)
         {
             _selectedConfigFileIndex = 0;
+            ClearCurrentConfigPointerFile();
             return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(forceSelectBaseName))
+        {
+            var forceIndex = _configFiles.FindIndex(name => string.Equals(name, forceSelectBaseName, StringComparison.OrdinalIgnoreCase));
+            if (forceIndex >= 0)
+            {
+                _selectedConfigFileIndex = forceIndex;
+                WriteCurrentConfigFileName(_configFiles[forceIndex]);
+                return;
+            }
         }
 
         if (!string.IsNullOrWhiteSpace(oldSelection))
@@ -406,7 +469,257 @@ public sealed class DemoWindow : GameWindow
             }
         }
 
+        var persistedName = TryReadCurrentConfigFileName();
+        if (!string.IsNullOrWhiteSpace(persistedName))
+        {
+            var persistedIndex = _configFiles.FindIndex(name => string.Equals(name, persistedName, StringComparison.OrdinalIgnoreCase));
+            if (persistedIndex >= 0)
+            {
+                _selectedConfigFileIndex = persistedIndex;
+                return;
+            }
+        }
+
         _selectedConfigFileIndex = Math.Clamp(_selectedConfigFileIndex, 0, _configFiles.Count - 1);
+    }
+
+    private static string ContentRootDirectory
+    {
+        get
+        {
+#if DEBUG
+            return Environment.CurrentDirectory;
+#else
+            return AppContext.BaseDirectory;
+#endif
+        }
+    }
+
+    private static string ConfigsDirectoryPath => Path.Combine(ContentRootDirectory, "Configs");
+
+    private static string ConfigCurrentFilePath => Path.Combine(ConfigsDirectoryPath, ".current");
+
+    private static string? TryReadCurrentConfigFileName()
+    {
+        try
+        {
+            if (!File.Exists(ConfigCurrentFilePath))
+            {
+                return null;
+            }
+
+            var line = File.ReadAllText(ConfigCurrentFilePath).Trim();
+            return string.IsNullOrWhiteSpace(line) ? null : line;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void WriteCurrentConfigFileName(string configBaseNameWithoutExtension)
+    {
+        try
+        {
+            Directory.CreateDirectory(ConfigsDirectoryPath);
+            File.WriteAllText(ConfigCurrentFilePath, configBaseNameWithoutExtension + Environment.NewLine);
+        }
+        catch
+        {
+            // Keep UI responsive if the file is locked or the path is not writable.
+        }
+    }
+
+    private static void ClearCurrentConfigPointerFile()
+    {
+        try
+        {
+            if (File.Exists(ConfigCurrentFilePath))
+            {
+                File.Delete(ConfigCurrentFilePath);
+            }
+        }
+        catch
+        {
+            // Ignore IO failures.
+        }
+    }
+
+    private void DrawConfigFileModals()
+    {
+        if (ImGui.BeginPopupModal("添加配置", ref _configAddModalOpen, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            ImGui.InputText("配置文件名", ref _addConfigNameBuffer, 256);
+            if (!string.IsNullOrEmpty(_configAddModalError))
+            {
+                ImGui.TextColored(new Vector4(0.9f, 0.25f, 0.25f, 1f), _configAddModalError);
+            }
+
+            if (ImGui.Button("创建"))
+            {
+                if (TryCreateEmptyConfigFile(_addConfigNameBuffer, out var err))
+                {
+                    _configAddModalError = string.Empty;
+                    _configAddModalOpen = false;
+                    ImGui.CloseCurrentPopup();
+                }
+                else
+                {
+                    _configAddModalError = err;
+                }
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("取消"))
+            {
+                _configAddModalError = string.Empty;
+                _configAddModalOpen = false;
+                ImGui.CloseCurrentPopup();
+            }
+
+            ImGui.EndPopup();
+        }
+
+        if (ImGui.BeginPopupModal("删除配置确认", ref _configDeleteModalOpen, ImGuiWindowFlags.AlwaysAutoResize))
+        {
+            var name = GetSelectedConfigBaseName() ?? string.Empty;
+            ImGui.TextUnformatted($"确定删除当前选中的配置文件 \"{name}.json\" 吗？此操作不可撤销。");
+            var canDelete = !string.IsNullOrEmpty(name);
+            if (!canDelete)
+            {
+                ImGui.BeginDisabled();
+            }
+
+            if (ImGui.Button("确定"))
+            {
+                var toDelete = GetSelectedConfigBaseName();
+                if (!string.IsNullOrEmpty(toDelete))
+                {
+                    TryDeleteConfigFileForBaseName(toDelete);
+                }
+
+                _configDeleteModalOpen = false;
+                ImGui.CloseCurrentPopup();
+            }
+
+            if (!canDelete)
+            {
+                ImGui.EndDisabled();
+            }
+
+            ImGui.SameLine();
+            if (ImGui.Button("取消"))
+            {
+                _configDeleteModalOpen = false;
+                ImGui.CloseCurrentPopup();
+            }
+
+            ImGui.EndPopup();
+        }
+    }
+
+    private string? GetSelectedConfigBaseName()
+    {
+        if (_configFiles.Count == 0)
+        {
+            return null;
+        }
+
+        return _configFiles[Math.Clamp(_selectedConfigFileIndex, 0, _configFiles.Count - 1)];
+    }
+
+    private static bool TryNormalizeConfigBaseName(string raw, out string baseName, out string error)
+    {
+        baseName = string.Empty;
+        error = string.Empty;
+        var n = raw.Trim();
+        if (n.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            n = n[..^5];
+        }
+
+        n = n.Trim();
+        if (n.Length == 0)
+        {
+            error = "名称不能为空";
+            return false;
+        }
+
+        if (n.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            error = "名称包含非法字符";
+            return false;
+        }
+
+        if (n is "." or "..")
+        {
+            error = "名称无效";
+            return false;
+        }
+
+        baseName = n;
+        return true;
+    }
+
+    private bool TryCreateEmptyConfigFile(string rawName, out string error)
+    {
+        error = string.Empty;
+        if (!TryNormalizeConfigBaseName(rawName, out var baseName, out var normErr))
+        {
+            error = normErr;
+            return false;
+        }
+
+        try
+        {
+            Directory.CreateDirectory(ConfigsDirectoryPath);
+            var path = Path.Combine(ConfigsDirectoryPath, baseName + ".json");
+            if (File.Exists(path))
+            {
+                error = "已存在同名配置文件";
+                return false;
+            }
+
+            File.WriteAllText(path, "{}" + Environment.NewLine);
+            RefreshConfigFiles(baseName);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+            return false;
+        }
+    }
+
+    private void TryDeleteConfigFileForBaseName(string baseName)
+    {
+        if (string.IsNullOrWhiteSpace(baseName))
+        {
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(ConfigsDirectoryPath, baseName + ".json");
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+
+            RefreshConfigFiles();
+            if (_configFiles.Count > 0)
+            {
+                WriteCurrentConfigFileName(_configFiles[_selectedConfigFileIndex]);
+            }
+            else
+            {
+                ClearCurrentConfigPointerFile();
+            }
+        }
+        catch
+        {
+            // Ignore delete failures; list refresh will reflect disk state on next scan if needed.
+        }
     }
 
     private void StartOnnxInference(OnnxModelConfig model)
@@ -1074,6 +1387,9 @@ public sealed class ImGuiController : IDisposable
         var io = ImGui.GetIO();
         io.ConfigFlags &= ~ImGuiConfigFlags.DockingEnable;
         ConfigureFonts(io);
+
+        var style = ImGui.GetStyle();
+        style.FrameRounding = 6f;
 
         io.BackendFlags |= ImGuiBackendFlags.HasMouseCursors;
         io.BackendFlags |= ImGuiBackendFlags.HasSetMousePos;
