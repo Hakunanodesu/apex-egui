@@ -608,7 +608,6 @@ public sealed partial class MainWindow : GameWindow
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted("特殊武器逻辑");
             ImGui.TableSetColumnIndex(1);
-            ImGui.SetCursorPosY(ImGui.GetCursorPosY() + topPanelStyle.CellPadding.Y);
             ImGui.BeginDisabled(_configFiles.Count == 0);
             var weaponNameColumnWidth = ImGui.CalcTextSize("武器名").X;
             for (var i = 0; i < SpecialWeaponNames.Length; i++)
@@ -622,6 +621,7 @@ public sealed partial class MainWindow : GameWindow
             weaponNameColumnWidth += specialWeaponStyle.CellPadding.X * 2f;
             aimSnapColumnWidth += specialWeaponStyle.CellPadding.X * 2f;
             rapidFireColumnWidth += specialWeaponStyle.CellPadding.X * 2f;
+            ImGui.SetCursorPosY(ImGui.GetCursorPosY() + topPanelStyle.CellPadding.Y);
             if (ImGui.BeginTable(
                     "##SpecialWeaponLogicTable",
                     3,
