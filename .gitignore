@@ -6,6 +6,7 @@
 bin/
 obj/
 imgui.ini
+window_state.ini
 
 Models/*
 !Models/.gitkeep
