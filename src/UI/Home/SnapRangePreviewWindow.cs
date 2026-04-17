@@ -29,7 +29,7 @@ public sealed partial class MainWindow
                 {
                     Text = string.Empty,
                     StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen,
-                    ClientSize = new System.Drawing.Size(Math.Max(1, _snapOuterRange), Math.Max(1, _snapOuterRange)),
+                    ClientSize = new System.Drawing.Size(Math.Max(1, _homeViewState.SnapOuterRange), Math.Max(1, _homeViewState.SnapOuterRange)),
                     TopMost = true,
                     FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedDialog,
                     MaximizeBox = false
@@ -40,7 +40,7 @@ public sealed partial class MainWindow
                 var refreshTimer = new System.Windows.Forms.Timer { Interval = 50 };
                 refreshTimer.Tick += (_, _) =>
                 {
-                    var outer = Math.Max(1, _snapOuterRange);
+                    var outer = Math.Max(1, _homeViewState.SnapOuterRange);
                     var expectedSize = new System.Drawing.Size(outer, outer);
                     if (form.ClientSize != expectedSize)
                     {
@@ -54,8 +54,8 @@ public sealed partial class MainWindow
                 {
                     e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
 
-                    var outer = Math.Max(1, _snapOuterRange);
-                    var inner = Math.Clamp(_snapInnerRange, 0, outer);
+                    var outer = Math.Max(1, _homeViewState.SnapOuterRange);
+                    var inner = Math.Clamp(_homeViewState.SnapInnerRange, 0, outer);
                     var drawDiameter = Math.Max(2, Math.Min(form.ClientSize.Width, form.ClientSize.Height) - 2);
                     var centerX = form.ClientSize.Width / 2f;
                     var centerY = form.ClientSize.Height / 2f;

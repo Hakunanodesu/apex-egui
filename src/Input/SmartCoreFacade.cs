@@ -1,14 +1,20 @@
-internal sealed class SmartCoreMappingService
+internal sealed class SmartCoreFacade
 {
+    private const string ViGemBusInstallPath = @"C:\Program Files\Nefarius Software Solutions";
+
+    public bool IsViGemBusReady()
+    {
+        return Directory.Exists(ViGemBusInstallPath);
+    }
+
     public void Update(
-        bool isViGemBusReady,
         int selectedIndex,
         (uint InstanceId, string Name)[] gamepads,
         SdlGamepadWorker? sdlGamepadWorker,
         ViGEmMappingWorker? viGEmMappingWorker,
         SmartCoreMappingState state)
     {
-        state.IsViGemBusReady = isViGemBusReady;
+        state.IsViGemBusReady = IsViGemBusReady();
         state.HasInputDevice = gamepads.Length > 0;
         state.IsEnabled = state.RequestedEnabled && state.IsDependenciesReady;
         state.IsMappingActive = false;

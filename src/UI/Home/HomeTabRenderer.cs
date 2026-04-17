@@ -122,10 +122,7 @@ public sealed partial class MainWindow
         ImGui.SameLine();
         if (ImGui.Button("添加", new Vector2(metrics.AddButtonWidth, 0f)))
         {
-            _addConfigNameBuffer = string.Empty;
-            _configAddModalError = string.Empty;
-            _configAddModalOpen = true;
-            _configAddModalOpenRequested = true;
+            _homeViewState.OpenAddModal();
         }
 
         ImGui.SameLine();
@@ -133,9 +130,7 @@ public sealed partial class MainWindow
         {
             if (ImGui.Button("删除", new Vector2(metrics.DeleteButtonWidth, 0f)))
             {
-                _pendingDeleteConfigBaseName = _configFiles[Math.Clamp(_selectedConfigFileIndex, 0, _configFiles.Count - 1)];
-                _configDeleteModalOpen = true;
-                _configDeleteModalOpenRequested = true;
+                _homeViewState.OpenDeleteModal(_configFiles[Math.Clamp(_selectedConfigFileIndex, 0, _configFiles.Count - 1)]);
             }
         }
         else
@@ -213,17 +208,17 @@ public sealed partial class MainWindow
             : 1;
         var displayHeightLimit = GetDisplayHeightOrWindowHeight();
         var snapOuterRangeMax = Math.Max(selectedModelSize, displayHeightLimit);
-        _snapOuterRange = Math.Clamp(_snapOuterRange, selectedModelSize, snapOuterRangeMax);
-        _snapInnerRange = Math.Clamp(_snapInnerRange, 1, _snapOuterRange);
-        _snapOuterStrength = Math.Clamp(_snapOuterStrength, 0f, 1f);
-        _snapInnerStrength = Math.Clamp(_snapInnerStrength, 0f, 1f);
+        _homeViewState.SnapOuterRange = Math.Clamp(_homeViewState.SnapOuterRange, selectedModelSize, snapOuterRangeMax);
+        _homeViewState.SnapInnerRange = Math.Clamp(_homeViewState.SnapInnerRange, 1, _homeViewState.SnapOuterRange);
+        _homeViewState.SnapOuterStrength = Math.Clamp(_homeViewState.SnapOuterStrength, 0f, 1f);
+        _homeViewState.SnapInnerStrength = Math.Clamp(_homeViewState.SnapInnerStrength, 0f, 1f);
         var snapRangeInputWidth = ImGui.CalcTextSize("0000").X + topPanelStyle.FramePadding.X * 2f;
         var snapStrengthInputWidth = snapRangeInputWidth + ImGui.GetFrameHeight() * 2f + topPanelStyle.ItemInnerSpacing.X * 2f;
         var snapExtraInputWidth = snapStrengthInputWidth;
-        _snapStartStrength = Math.Clamp(_snapStartStrength, 0f, 1f);
-        _snapVerticalStrengthFactor = Math.Clamp(_snapVerticalStrengthFactor, 0f, 1f);
-        _snapHipfireStrengthFactor = Math.Clamp(_snapHipfireStrengthFactor, 0f, 1f);
-        _snapHeight = Math.Clamp(_snapHeight, 0f, 1f);
+        _homeViewState.SnapStartStrength = Math.Clamp(_homeViewState.SnapStartStrength, 0f, 1f);
+        _homeViewState.SnapVerticalStrengthFactor = Math.Clamp(_homeViewState.SnapVerticalStrengthFactor, 0f, 1f);
+        _homeViewState.SnapHipfireStrengthFactor = Math.Clamp(_homeViewState.SnapHipfireStrengthFactor, 0f, 1f);
+        _homeViewState.SnapHeight = Math.Clamp(_homeViewState.SnapHeight, 0f, 1f);
         var snapLabelWidth = metrics.BaseTextWidth * 6f;
         var snapLastLabelWidth = metrics.BaseTextWidth * 4f;
         ImGui.SetCursorPosY(ImGui.GetCursorPosY() - topPanelStyle.CellPadding.Y);
@@ -243,10 +238,11 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("内圈范围");
             ImGui.TableSetColumnIndex(1);
             ImGui.SetNextItemWidth(snapRangeInputWidth);
-            if (ImGui.InputInt("##SnapInnerRange", ref _snapInnerRange, 0, 0))
+            var snapInnerRange = _homeViewState.SnapInnerRange;
+            if (ImGui.InputInt("##SnapInnerRange", ref snapInnerRange, 0, 0))
             {
-                _snapInnerRange = Math.Clamp(_snapInnerRange, 1, _snapOuterRange);
-                TryWriteIntToCurrentConfig("snapInnerRange", _snapInnerRange);
+                _homeViewState.SnapInnerRange = Math.Clamp(snapInnerRange, 1, _homeViewState.SnapOuterRange);
+                TryWriteIntToCurrentConfig("snapInnerRange", _homeViewState.SnapInnerRange);
             }
 
             ImGui.TableSetColumnIndex(2);
@@ -254,12 +250,13 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("外圈范围");
             ImGui.TableSetColumnIndex(3);
             ImGui.SetNextItemWidth(snapRangeInputWidth);
-            if (ImGui.InputInt("##SnapOuterRange", ref _snapOuterRange, 0, 0))
+            var snapOuterRange = _homeViewState.SnapOuterRange;
+            if (ImGui.InputInt("##SnapOuterRange", ref snapOuterRange, 0, 0))
             {
-                _snapOuterRange = Math.Clamp(_snapOuterRange, selectedModelSize, snapOuterRangeMax);
-                _snapInnerRange = Math.Clamp(_snapInnerRange, 1, _snapOuterRange);
-                TryWriteIntToCurrentConfig("snapOuterRange", _snapOuterRange);
-                TryWriteIntToCurrentConfig("snapInnerRange", _snapInnerRange);
+                _homeViewState.SnapOuterRange = Math.Clamp(snapOuterRange, selectedModelSize, snapOuterRangeMax);
+                _homeViewState.SnapInnerRange = Math.Clamp(_homeViewState.SnapInnerRange, 1, _homeViewState.SnapOuterRange);
+                TryWriteIntToCurrentConfig("snapOuterRange", _homeViewState.SnapOuterRange);
+                TryWriteIntToCurrentConfig("snapInnerRange", _homeViewState.SnapInnerRange);
             }
 
             ImGui.TableSetColumnIndex(5);
@@ -279,10 +276,11 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("内圈强度");
             ImGui.TableSetColumnIndex(1);
             ImGui.SetNextItemWidth(snapStrengthInputWidth);
-            if (ImGui.InputFloat("##SnapInnerStrength", ref _snapInnerStrength, 0.01f, 0.01f, "%.2f"))
+            var snapInnerStrength = _homeViewState.SnapInnerStrength;
+            if (ImGui.InputFloat("##SnapInnerStrength", ref snapInnerStrength, 0.01f, 0.01f, "%.2f"))
             {
-                _snapInnerStrength = Math.Clamp(_snapInnerStrength, 0f, 1f);
-                TryWriteFloatToCurrentConfig("snapInnerStrength", _snapInnerStrength);
+                _homeViewState.SnapInnerStrength = Math.Clamp(snapInnerStrength, 0f, 1f);
+                TryWriteFloatToCurrentConfig("snapInnerStrength", _homeViewState.SnapInnerStrength);
             }
 
             ImGui.TableSetColumnIndex(2);
@@ -290,10 +288,11 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("外圈强度");
             ImGui.TableSetColumnIndex(3);
             ImGui.SetNextItemWidth(snapStrengthInputWidth);
-            if (ImGui.InputFloat("##SnapOuterStrength", ref _snapOuterStrength, 0.01f, 0.01f, "%.2f"))
+            var snapOuterStrength = _homeViewState.SnapOuterStrength;
+            if (ImGui.InputFloat("##SnapOuterStrength", ref snapOuterStrength, 0.01f, 0.01f, "%.2f"))
             {
-                _snapOuterStrength = Math.Clamp(_snapOuterStrength, 0f, 1f);
-                TryWriteFloatToCurrentConfig("snapOuterStrength", _snapOuterStrength);
+                _homeViewState.SnapOuterStrength = Math.Clamp(snapOuterStrength, 0f, 1f);
+                TryWriteFloatToCurrentConfig("snapOuterStrength", _homeViewState.SnapOuterStrength);
             }
 
             ImGui.TableSetColumnIndex(4);
@@ -301,10 +300,11 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("起始强度");
             ImGui.TableSetColumnIndex(5);
             ImGui.SetNextItemWidth(snapExtraInputWidth);
-            if (ImGui.InputFloat("##SnapStartStrength", ref _snapStartStrength, 0.01f, 0.01f, "%.2f"))
+            var snapStartStrength = _homeViewState.SnapStartStrength;
+            if (ImGui.InputFloat("##SnapStartStrength", ref snapStartStrength, 0.01f, 0.01f, "%.2f"))
             {
-                _snapStartStrength = Math.Clamp(_snapStartStrength, 0f, 1f);
-                TryWriteFloatToCurrentConfig("snapStartStrength", _snapStartStrength);
+                _homeViewState.SnapStartStrength = Math.Clamp(snapStartStrength, 0f, 1f);
+                TryWriteFloatToCurrentConfig("snapStartStrength", _homeViewState.SnapStartStrength);
             }
 
             // Row 3: extras
@@ -315,10 +315,11 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("腰射强度系数");
             ImGui.TableSetColumnIndex(1);
             ImGui.SetNextItemWidth(snapExtraInputWidth);
-            if (ImGui.InputFloat("##SnapHipfireStrengthFactor", ref _snapHipfireStrengthFactor, 0.01f, 0.01f, "%.2f"))
+            var snapHipfireStrengthFactor = _homeViewState.SnapHipfireStrengthFactor;
+            if (ImGui.InputFloat("##SnapHipfireStrengthFactor", ref snapHipfireStrengthFactor, 0.01f, 0.01f, "%.2f"))
             {
-                _snapHipfireStrengthFactor = Math.Clamp(_snapHipfireStrengthFactor, 0f, 1f);
-                TryWriteFloatToCurrentConfig("snapHipfireStrengthFactor", _snapHipfireStrengthFactor);
+                _homeViewState.SnapHipfireStrengthFactor = Math.Clamp(snapHipfireStrengthFactor, 0f, 1f);
+                TryWriteFloatToCurrentConfig("snapHipfireStrengthFactor", _homeViewState.SnapHipfireStrengthFactor);
             }
 
             ImGui.TableSetColumnIndex(2);
@@ -326,10 +327,11 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("垂直强度系数");
             ImGui.TableSetColumnIndex(3);
             ImGui.SetNextItemWidth(snapExtraInputWidth);
-            if (ImGui.InputFloat("##SnapVerticalStrengthFactor", ref _snapVerticalStrengthFactor, 0.01f, 0.01f, "%.2f"))
+            var snapVerticalStrengthFactor = _homeViewState.SnapVerticalStrengthFactor;
+            if (ImGui.InputFloat("##SnapVerticalStrengthFactor", ref snapVerticalStrengthFactor, 0.01f, 0.01f, "%.2f"))
             {
-                _snapVerticalStrengthFactor = Math.Clamp(_snapVerticalStrengthFactor, 0f, 1f);
-                TryWriteFloatToCurrentConfig("snapVerticalStrengthFactor", _snapVerticalStrengthFactor);
+                _homeViewState.SnapVerticalStrengthFactor = Math.Clamp(snapVerticalStrengthFactor, 0f, 1f);
+                TryWriteFloatToCurrentConfig("snapVerticalStrengthFactor", _homeViewState.SnapVerticalStrengthFactor);
             }
 
             ImGui.TableSetColumnIndex(4);
@@ -337,32 +339,33 @@ public sealed partial class MainWindow
             ImGui.TextUnformatted("吸附高度");
             ImGui.TableSetColumnIndex(5);
             ImGui.SetNextItemWidth(snapExtraInputWidth);
-            if (ImGui.InputFloat("##SnapHeight", ref _snapHeight, 0.01f, 0.01f, "%.2f"))
+            var snapHeight = _homeViewState.SnapHeight;
+            if (ImGui.InputFloat("##SnapHeight", ref snapHeight, 0.01f, 0.01f, "%.2f"))
             {
-                _snapHeight = Math.Clamp(_snapHeight, 0f, 1f);
-                TryWriteFloatToCurrentConfig("snapHeight", _snapHeight);
+                _homeViewState.SnapHeight = Math.Clamp(snapHeight, 0f, 1f);
+                TryWriteFloatToCurrentConfig("snapHeight", _homeViewState.SnapHeight);
             }
 
             // Row 4: interpolation
             ImGui.TableNextRow();
             ImGui.TableNextRow();
-            _snapInnerInterpolationTypeIndex = _snapInnerInterpolationTypeIndex >= 0 && _snapInnerInterpolationTypeIndex < SnapInnerInterpolationTypeOptions.Length
-                ? _snapInnerInterpolationTypeIndex
+            _homeViewState.SnapInnerInterpolationTypeIndex = _homeViewState.SnapInnerInterpolationTypeIndex >= 0 && _homeViewState.SnapInnerInterpolationTypeIndex < SnapInnerInterpolationTypeOptions.Length
+                ? _homeViewState.SnapInnerInterpolationTypeIndex
                 : 0;
             ImGui.TableSetColumnIndex(0);
             ImGui.AlignTextToFramePadding();
             ImGui.TextUnformatted("内圈插值类型");
             ImGui.TableSetColumnIndex(1);
             ImGui.SetNextItemWidth(snapStrengthInputWidth);
-            var selectedSnapInnerInterpolationLabel = SnapInnerInterpolationTypeOptions[_snapInnerInterpolationTypeIndex];
+            var selectedSnapInnerInterpolationLabel = SnapInnerInterpolationTypeOptions[_homeViewState.SnapInnerInterpolationTypeIndex];
             if (ImGui.BeginCombo("##SnapInnerInterpolationTypeCombo", selectedSnapInnerInterpolationLabel))
             {
                 for (var i = 0; i < SnapInnerInterpolationTypeOptions.Length; i++)
                 {
-                    var isSelected = i == _snapInnerInterpolationTypeIndex;
+                    var isSelected = i == _homeViewState.SnapInnerInterpolationTypeIndex;
                     if (ImGui.Selectable(SnapInnerInterpolationTypeOptions[i], isSelected))
                     {
-                        _snapInnerInterpolationTypeIndex = i;
+                        _homeViewState.SnapInnerInterpolationTypeIndex = i;
                         TryWriteStringToCurrentConfig("snapInnerInterpolationType", SnapInnerInterpolationTypeOptions[i]);
                     }
 
@@ -401,8 +404,8 @@ public sealed partial class MainWindow
         ImGui.AlignTextToFramePadding();
         ImGui.TextUnformatted("开启吸附方式");
         ImGui.TableSetColumnIndex(1);
-        _homeSnapModeIndex = _homeSnapModeIndex >= 0 && _homeSnapModeIndex < HomeSnapModeOptions.Length ? _homeSnapModeIndex : 0;
-        var selectedSnapModeLabel = HomeSnapModeOptions[_homeSnapModeIndex];
+        _homeViewState.SnapModeIndex = _homeViewState.SnapModeIndex >= 0 && _homeViewState.SnapModeIndex < HomeSnapModeOptions.Length ? _homeViewState.SnapModeIndex : 0;
+        var selectedSnapModeLabel = HomeSnapModeOptions[_homeViewState.SnapModeIndex];
         var snapComboWidth = ImGui.GetContentRegionAvail().X - reserveWidth;
         ImGui.SetNextItemWidth(snapComboWidth);
         ImGui.BeginDisabled(_configFiles.Count == 0);
@@ -410,10 +413,10 @@ public sealed partial class MainWindow
         {
             for (var i = 0; i < HomeSnapModeOptions.Length; i++)
             {
-                var isSelected = i == _homeSnapModeIndex;
+                var isSelected = i == _homeViewState.SnapModeIndex;
                 if (ImGui.Selectable(HomeSnapModeOptions[i], isSelected))
                 {
-                    _homeSnapModeIndex = i;
+                    _homeViewState.SnapModeIndex = i;
                     TryWriteStringToCurrentConfig("snap", HomeSnapModeOptions[i]);
                 }
 

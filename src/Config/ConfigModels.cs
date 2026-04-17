@@ -18,3 +18,14 @@ internal sealed class SnapConfigState
 
     public int InnerInterpolationTypeIndex { get; init; }
 }
+
+internal readonly record struct ConfigRefreshResult(IReadOnlyList<string> ConfigFiles, int SelectedIndex);
+
+internal readonly record struct ConfigSelectionResult(
+    bool HasConfig,
+    int SnapModeIndex,
+    int ModelIndex,
+    SnapConfigState SnapConfig)
+{
+    public static ConfigSelectionResult Empty => new(false, -1, -1, new SnapConfigState());
+}

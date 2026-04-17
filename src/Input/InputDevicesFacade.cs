@@ -1,4 +1,4 @@
-internal sealed class InputDeviceService
+internal sealed class InputDevicesFacade
 {
     public (uint InstanceId, string Name)[] GetConnectedGamepads(SdlGamepadWorker? sdlGamepadWorker, bool forceRefresh)
     {

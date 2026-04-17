@@ -2,8 +2,7 @@ public sealed partial class MainWindow
 {
     private void MirrorSelectedGamepadToVirtualGamepad()
     {
-        _smartCoreMappingService.Update(
-            _dependencyService.IsViGemBusReady(),
+        _smartCoreFacade.Update(
             _homeSelectedGamepadIndex,
             _cachedConnectedGamepads,
             _sdlGamepadWorker,
@@ -29,7 +28,7 @@ public sealed partial class MainWindow
     private void RefreshInputDevicesCore(ref int selectedIndex, bool shouldResetVirtualMappingHandle, bool forceRefresh)
     {
         UpdateConnectedGamepadCache(forceRefresh);
-        selectedIndex = _inputDeviceService.NormalizeSelectedIndex(selectedIndex, _cachedGamepadOptions.Length);
+        selectedIndex = _inputDevicesFacade.NormalizeSelectedIndex(selectedIndex, _cachedGamepadOptions.Length);
         if (shouldResetVirtualMappingHandle)
         {
             _sdlGamepadWorker?.SetSelectedGamepad(null);
@@ -49,7 +48,7 @@ public sealed partial class MainWindow
 
     private void UpdateConnectedGamepadCache(bool forceRefresh = false)
     {
-        _cachedConnectedGamepads = _inputDeviceService.GetConnectedGamepads(_sdlGamepadWorker, forceRefresh);
-        _cachedGamepadOptions = _inputDeviceService.BuildGamepadOptions(_cachedConnectedGamepads);
+        _cachedConnectedGamepads = _inputDevicesFacade.GetConnectedGamepads(_sdlGamepadWorker, forceRefresh);
+        _cachedGamepadOptions = _inputDevicesFacade.BuildGamepadOptions(_cachedConnectedGamepads);
     }
 }
