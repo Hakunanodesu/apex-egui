@@ -9,6 +9,8 @@ public sealed partial class MainWindow
             _viGEmMappingWorker,
             _smartCoreMappingState);
 
+        SyncSmartCoreVisionPipeline();
+
         if (_smartCoreMappingState.EffectiveSelectedIndex >= 0)
         {
             _homeSelectedGamepadIndex = _smartCoreMappingState.EffectiveSelectedIndex;

@@ -5,8 +5,8 @@
 
 bin/
 obj/
-imgui.ini
-window_state.ini
+*.ini
+*.sln
 
 Models/*
 !Models/.gitkeep

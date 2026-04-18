@@ -651,6 +651,7 @@ public sealed partial class MainWindow : GameWindow
     protected override void OnUnload()
     {
         CloseSnapRangePreviewWindow();
+        CloseSmartCorePreviewWindow();
 
         _viGEmMappingWorker?.Dispose();
         _viGEmMappingWorker = null;

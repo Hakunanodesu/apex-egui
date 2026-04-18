@@ -109,6 +109,7 @@ public sealed partial class MainWindow
 
     private void DrawConfigSelectionRow(HomeLayoutMetrics metrics, ImGuiStylePtr topPanelStyle)
     {
+        var disableConfigSelection = _smartCoreMappingState.IsEnabled;
         ImGui.TableNextRow();
         ImGui.TableNextRow();
         ImGui.TableSetColumnIndex(0);
@@ -118,6 +119,7 @@ public sealed partial class MainWindow
         ImGui.TableSetColumnIndex(1);
         ImGui.SetCursorPosY(ImGui.GetCursorPosY() - topPanelStyle.CellPadding.Y);
         var configComboWidth = ImGui.GetContentRegionAvail().X - metrics.ReserveWidth;
+        ImGui.BeginDisabled(disableConfigSelection);
         DrawConfigFileCombo("##TopConfigCombo", configComboWidth);
         ImGui.SameLine();
         if (ImGui.Button("添加", new Vector2(metrics.AddButtonWidth, 0f)))
@@ -139,6 +141,7 @@ public sealed partial class MainWindow
             ImGui.Button("删除", new Vector2(metrics.DeleteButtonWidth, 0f));
             ImGui.EndDisabled();
         }
+        ImGui.EndDisabled();
     }
 
     private void DrawSmartCoreRow()
@@ -158,6 +161,7 @@ public sealed partial class MainWindow
         ImGui.BeginDisabled(!_smartCoreMappingState.RequestedEnabled);
         if (ImGui.Button("预览##SmartCorePreviewButton"))
         {
+            OpenSmartCorePreviewWindow();
         }
         ImGui.EndDisabled();
     }
@@ -180,12 +184,14 @@ public sealed partial class MainWindow
         ImGui.TextUnformatted("选择模型");
         ImGui.TableSetColumnIndex(1);
         var modelComboWidth = ImGui.GetContentRegionAvail().X - metrics.ReserveWidth;
+        ImGui.BeginDisabled(_smartCoreMappingState.IsEnabled);
         DrawHomeModelCombo("##HomeModelCombo", modelComboWidth);
         ImGui.SameLine();
         if (ImGui.Button("刷新", new Vector2(refreshButtonWidth, 0f)))
         {
             RefreshOnnxModels();
         }
+        ImGui.EndDisabled();
 
         DrawSnapSettingsSection(metrics, topPanelStyle);
         DrawSnapCurveSection(topPanelStyle);

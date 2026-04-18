@@ -23,6 +23,10 @@ public sealed partial class MainWindow
     private OnnxInferenceSnapshot _onnxSnapshot;
     private int _onnxLastFrameId;
     private byte[] _onnxUploadBuffer = Array.Empty<byte>();
+    private string? _onnxActiveModelPath;
+    private int _dxgiActiveCaptureWidth;
+    private int _dxgiActiveCaptureHeight;
+    private bool _smartCoreVisionManaged;
 
     private void DrawDxgiTab()
     {
@@ -109,6 +113,9 @@ public sealed partial class MainWindow
             {
                 StartOnnxInference(selected);
             }
+
+            ImGui.SameLine();
+            ImGui.TextDisabled("xywh");
         }
         else
         {
@@ -125,6 +132,19 @@ public sealed partial class MainWindow
         ImGui.Text($"推理耗时 P99: {_onnxSnapshot.P99InferenceMs:0.00} ms");
         ImGui.Text($"检测框数量: {_onnxSnapshot.DetectionCount}");
         ImGui.Text($"输出摘要: {_onnxSnapshot.OutputSummary}");
+        var probe = _onnxWorker?.GetDebugProbe() ?? default;
+        if (probe.HasValue)
+        {
+            ImGui.Text($"raw4: {probe.Raw0:0.00}, {probe.Raw1:0.00}, {probe.Raw2:0.00}, {probe.Raw3:0.00}");
+            ImGui.Text($"score: {probe.Score:0.000} (obj {probe.Objectness:0.000} * cls {probe.ClassScore:0.000})");
+            ImGui.TextColored(new Vector4(0.20f, 0.85f, 1.00f, 1.00f), "xywh");
+            ImGui.SameLine();
+            ImGui.TextUnformatted("/");
+            ImGui.SameLine();
+            ImGui.TextColored(new Vector4(1.00f, 0.60f, 0.20f, 1.00f), "xyxy");
+            ImGui.SameLine();
+            ImGui.TextUnformatted(" overlay active on preview");
+        }
     }
 
     private void DrawViGEmVirtualGamepadPanel()
@@ -207,24 +227,34 @@ public sealed partial class MainWindow
 
     private void StartOnnxInference(OnnxModelConfig model)
     {
+        _smartCoreVisionManaged = false;
+        StartOnnxInference(model, model.InputWidth, model.InputHeight, ensureCaptureRunning: true);
+    }
+
+    private void StartOnnxInference(OnnxModelConfig model, int captureWidth, int captureHeight, bool ensureCaptureRunning)
+    {
         try
         {
             StopOnnxInference("重启推理");
-            if (_dxgiWorker is null)
+            if (ensureCaptureRunning && _dxgiWorker is null)
             {
-                StartDxgiCapture();
+                StartDxgiCapture(captureWidth, captureHeight);
             }
 
-            _dxgiWorker?.SetCaptureRegion(model.InputWidth, model.InputHeight);
+            _dxgiWorker?.SetCaptureRegion(captureWidth, captureHeight);
+            _dxgiActiveCaptureWidth = Math.Max(1, captureWidth);
+            _dxgiActiveCaptureHeight = Math.Max(1, captureHeight);
             _onnxLastFrameId = 0;
             _onnxUploadBuffer = Array.Empty<byte>();
             _onnxWorker = new OnnxDmlWorker(model);
+            _onnxActiveModelPath = model.OnnxPath;
             _onnxStatus = "推理中";
         }
         catch (Exception ex)
         {
             _onnxStatus = $"启动失败: {ex.GetType().Name}: {ex.Message}";
             _onnxWorker = null;
+            _onnxActiveModelPath = null;
         }
     }
 
@@ -232,8 +262,70 @@ public sealed partial class MainWindow
     {
         _onnxWorker?.Dispose();
         _onnxWorker = null;
+        _onnxActiveModelPath = null;
         _onnxStatus = status;
         _onnxSnapshot = default;
+    }
+
+    private void SyncSmartCoreVisionPipeline()
+    {
+        if (!_smartCoreMappingState.IsEnabled)
+        {
+            if (_smartCoreVisionManaged)
+            {
+                StopOnnxInference("鏅烘収鏍稿績宸插仠姝?");
+                StopDxgiCapture("鏅烘収鏍稿績宸插仠姝?");
+                _smartCoreVisionManaged = false;
+            }
+
+            return;
+        }
+
+        if (!TryGetHomeSelectedModel(out var model))
+        {
+            if (_smartCoreVisionManaged)
+            {
+                StopOnnxInference("鏅烘収鏍稿績缂哄皯妯″瀷");
+                StopDxgiCapture("鏅烘収鏍稿績缂哄皯妯″瀷");
+            }
+
+            _smartCoreVisionManaged = false;
+            return;
+        }
+
+        var captureSize = Math.Max(1, _homeViewState.SnapOuterRange);
+        var requiresDxgiRestart = _dxgiWorker is null
+            || _dxgiActiveCaptureWidth != captureSize
+            || _dxgiActiveCaptureHeight != captureSize;
+        if (requiresDxgiRestart)
+        {
+            StartDxgiCapture(captureSize, captureSize);
+        }
+        else
+        {
+            _dxgiWorker?.SetCaptureRegion(captureSize, captureSize);
+        }
+
+        var requiresOnnxRestart = _onnxWorker is null
+            || !string.Equals(_onnxActiveModelPath, model.OnnxPath, StringComparison.OrdinalIgnoreCase);
+        if (requiresOnnxRestart)
+        {
+            StartOnnxInference(model, captureSize, captureSize, ensureCaptureRunning: false);
+        }
+
+        _smartCoreVisionManaged = true;
+    }
+
+    private bool TryGetHomeSelectedModel(out OnnxModelConfig model)
+    {
+        if (_onnxTopSelectedModelIndex >= 0 && _onnxTopSelectedModelIndex < _onnxModels.Count)
+        {
+            model = _onnxModels[_onnxTopSelectedModelIndex];
+            return true;
+        }
+
+        model = default;
+        return false;
     }
 
     private void PumpOnnxFromDxgi()
@@ -308,7 +400,9 @@ public sealed partial class MainWindow
         if (previewTexture != 0 && previewWidth > 0 && previewHeight > 0)
         {
             var previewSize = new Vector2(previewWidth, previewHeight);
+            var previewPos = ImGui.GetCursorScreenPos();
             ImGui.Image((IntPtr)previewTexture, previewSize, new Vector2(0, 0), new Vector2(1, 1));
+            DrawOnnxDebugOverlay(previewPos, previewSize);
         }
         else
         {
@@ -316,22 +410,92 @@ public sealed partial class MainWindow
         }
     }
 
+    private void DrawOnnxDebugOverlay(Vector2 imagePos, Vector2 imageSize)
+    {
+        var probe = _onnxWorker?.GetDebugProbe() ?? default;
+        if (!probe.HasValue || probe.InputWidth <= 0 || probe.InputHeight <= 0)
+        {
+            return;
+        }
+
+        var drawList = ImGui.GetWindowDrawList();
+        DrawLabeledRect(drawList, BuildRectFromXywh(probe, imagePos, imageSize), ImGui.GetColorU32(new Vector4(0.20f, 0.85f, 1.00f, 1.00f)), "xywh");
+        DrawLabeledRect(drawList, BuildRectFromXyxy(probe, imagePos, imageSize), ImGui.GetColorU32(new Vector4(1.00f, 0.60f, 0.20f, 1.00f)), "xyxy");
+    }
+
+    private static void DrawLabeledRect(ImDrawListPtr drawList, (Vector2 Min, Vector2 Max) rect, uint color, string label)
+    {
+        if (rect.Max.X <= rect.Min.X || rect.Max.Y <= rect.Min.Y)
+        {
+            return;
+        }
+
+        drawList.AddRect(rect.Min, rect.Max, color, 0f, ImDrawFlags.None, 2f);
+        var textSize = ImGui.CalcTextSize(label);
+        var textBgMax = new Vector2(rect.Min.X + textSize.X + 8f, rect.Min.Y + textSize.Y + 4f);
+        drawList.AddRectFilled(rect.Min, textBgMax, color);
+        drawList.AddText(new Vector2(rect.Min.X + 4f, rect.Min.Y + 2f), ImGui.GetColorU32(new Vector4(0f, 0f, 0f, 1f)), label);
+    }
+
+    private static (Vector2 Min, Vector2 Max) BuildRectFromXywh(OnnxDebugProbe probe, Vector2 imagePos, Vector2 imageSize)
+    {
+        var x1 = probe.Raw0 - probe.Raw2 * 0.5f;
+        var y1 = probe.Raw1 - probe.Raw3 * 0.5f;
+        var x2 = probe.Raw0 + probe.Raw2 * 0.5f;
+        var y2 = probe.Raw1 + probe.Raw3 * 0.5f;
+        return MapRectToPreview(x1, y1, x2, y2, probe, imagePos, imageSize);
+    }
+
+    private static (Vector2 Min, Vector2 Max) BuildRectFromXyxy(OnnxDebugProbe probe, Vector2 imagePos, Vector2 imageSize)
+    {
+        return MapRectToPreview(probe.Raw0, probe.Raw1, probe.Raw2, probe.Raw3, probe, imagePos, imageSize);
+    }
+
+    private static (Vector2 Min, Vector2 Max) MapRectToPreview(float x1, float y1, float x2, float y2, OnnxDebugProbe probe, Vector2 imagePos, Vector2 imageSize)
+    {
+        var minX = MathF.Min(x1, x2);
+        var minY = MathF.Min(y1, y2);
+        var maxX = MathF.Max(x1, x2);
+        var maxY = MathF.Max(y1, y2);
+        var scaleX = imageSize.X / probe.InputWidth;
+        var scaleY = imageSize.Y / probe.InputHeight;
+
+        minX = Math.Clamp(minX, 0f, probe.InputWidth);
+        minY = Math.Clamp(minY, 0f, probe.InputHeight);
+        maxX = Math.Clamp(maxX, 0f, probe.InputWidth);
+        maxY = Math.Clamp(maxY, 0f, probe.InputHeight);
+
+        return (
+            imagePos + new Vector2(minX * scaleX, minY * scaleY),
+            imagePos + new Vector2(maxX * scaleX, maxY * scaleY));
+    }
+
     private void OnStartDxgiClicked()
     {
+        _smartCoreVisionManaged = false;
         StartDxgiCapture();
     }
 
     private void OnStopDxgiClicked()
     {
+        _smartCoreVisionManaged = false;
         StopDxgiCapture("已停止");
     }
 
     private void StartDxgiCapture()
     {
+        StartDxgiCapture(320, 320);
+    }
+
+    private void StartDxgiCapture(int captureWidth, int captureHeight)
+    {
         try
         {
             StopDxgiCapture("重启捕获");
             _dxgiWorker = new DesktopCaptureWorker();
+            _dxgiWorker.SetCaptureRegion(captureWidth, captureHeight);
+            _dxgiActiveCaptureWidth = Math.Max(1, captureWidth);
+            _dxgiActiveCaptureHeight = Math.Max(1, captureHeight);
             _dxgiStatus = "捕获中";
             _dxgiPerfStats.Reset();
             _dxgiPerfSnapshot = default;
@@ -355,6 +519,8 @@ public sealed partial class MainWindow
         _dxgiUploadBuffer = Array.Empty<byte>();
         _dxgiPreviewWidth = 0;
         _dxgiPreviewHeight = 0;
+        _dxgiActiveCaptureWidth = 0;
+        _dxgiActiveCaptureHeight = 0;
         if (_dxgiPreviewTexture != 0)
         {
             GL.DeleteTexture(_dxgiPreviewTexture);

@@ -12,6 +12,7 @@ internal readonly struct OnnxInferenceSnapshot
     public readonly double P99InferenceMs;
     public readonly int DetectionCount;
     public readonly string OutputSummary;
+    public readonly OnnxDebugProbe Probe;
 
     public OnnxInferenceSnapshot(
         string status,
@@ -21,6 +22,19 @@ internal readonly struct OnnxInferenceSnapshot
         double p99InferenceMs,
         int detectionCount,
         string outputSummary)
+        : this(status, inferenceFps, avgInferenceMs, p95InferenceMs, p99InferenceMs, detectionCount, outputSummary, default)
+    {
+    }
+
+    public OnnxInferenceSnapshot(
+        string status,
+        double inferenceFps,
+        double avgInferenceMs,
+        double p95InferenceMs,
+        double p99InferenceMs,
+        int detectionCount,
+        string outputSummary,
+        OnnxDebugProbe probe)
     {
         Status = status;
         InferenceFps = inferenceFps;
@@ -29,6 +43,45 @@ internal readonly struct OnnxInferenceSnapshot
         P99InferenceMs = p99InferenceMs;
         DetectionCount = detectionCount;
         OutputSummary = outputSummary;
+        Probe = probe;
+    }
+}
+
+internal readonly struct OnnxDebugProbe
+{
+    public readonly bool HasValue;
+    public readonly int InputWidth;
+    public readonly int InputHeight;
+    public readonly float Raw0;
+    public readonly float Raw1;
+    public readonly float Raw2;
+    public readonly float Raw3;
+    public readonly float Objectness;
+    public readonly float ClassScore;
+    public readonly float Score;
+
+    public OnnxDebugProbe(
+        bool hasValue,
+        int inputWidth,
+        int inputHeight,
+        float raw0,
+        float raw1,
+        float raw2,
+        float raw3,
+        float objectness,
+        float classScore,
+        float score)
+    {
+        HasValue = hasValue;
+        InputWidth = inputWidth;
+        InputHeight = inputHeight;
+        Raw0 = raw0;
+        Raw1 = raw1;
+        Raw2 = raw2;
+        Raw3 = raw3;
+        Objectness = objectness;
+        ClassScore = classScore;
+        Score = score;
     }
 }
 
@@ -45,6 +98,7 @@ internal sealed class OnnxDmlWorker : IDisposable
     private int _latestFrameHeight;
     private int _latestFrameId;
     private int _lastProcessedFrameId;
+    private OnnxDebugProbe _latestProbe;
 
     private readonly List<double> _windowSamples = new(256);
     private DateTime _windowStartUtc = DateTime.UtcNow;
@@ -101,6 +155,14 @@ internal sealed class OnnxDmlWorker : IDisposable
         }
     }
 
+    public OnnxDebugProbe GetDebugProbe()
+    {
+        lock (_sync)
+        {
+            return _latestProbe;
+        }
+    }
+
     private void WorkerMain()
     {
         try
@@ -149,7 +211,19 @@ internal sealed class OnnxDmlWorker : IDisposable
                 sw.Stop();
 
                 var outputSummary = BuildOutputSummary(outputs);
-                var detectionCount = CountDetections(outputs, _model.ConfThreshold, _model.IouThreshold, _model.AllowedClasses);
+                var detectionCount = CountDetections(
+                    outputs,
+                    _model.InputWidth,
+                    _model.InputHeight,
+                    _model.ConfThreshold,
+                    _model.IouThreshold,
+                    _model.AllowedClasses,
+                    out var probe);
+                lock (_sync)
+                {
+                    _latestProbe = probe;
+                }
+
                 PushInferenceSample(sw.Elapsed.TotalMilliseconds, detectionCount, outputSummary);
             }
         }
@@ -296,10 +370,14 @@ internal sealed class OnnxDmlWorker : IDisposable
 
     private static int CountDetections(
         IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs,
+        int inputWidth,
+        int inputHeight,
         float confThres,
         float iouThres,
-        HashSet<int> allowedClasses)
+        HashSet<int> allowedClasses,
+        out OnnxDebugProbe probe)
     {
+        probe = default;
         foreach (var output in outputs)
         {
             Tensor<float>? tensor;
@@ -319,7 +397,7 @@ internal sealed class OnnxDmlWorker : IDisposable
 
             var dims = tensor.Dimensions.ToArray();
             var values = tensor.ToArray();
-            if (TryParseDetections(values, dims, confThres, iouThres, allowedClasses, out var count))
+            if (TryParseDetections(values, dims, inputWidth, inputHeight, confThres, iouThres, allowedClasses, out var count, out probe))
             {
                 return count;
             }
@@ -331,12 +409,16 @@ internal sealed class OnnxDmlWorker : IDisposable
     private static bool TryParseDetections(
         float[] values,
         int[] dims,
+        int inputWidth,
+        int inputHeight,
         float confThres,
         float iouThres,
         HashSet<int> allowedClasses,
-        out int count)
+        out int count,
+        out OnnxDebugProbe probe)
     {
         count = 0;
+        probe = default;
         if (dims.Length != 3)
         {
             return false;
@@ -363,6 +445,7 @@ internal sealed class OnnxDmlWorker : IDisposable
         }
 
         var boxes = new List<(float x, float y, float w, float h, float score)>();
+        var bestScore = float.MinValue;
         for (var i = 0; i < rows; i++)
         {
             int baseIndex;
@@ -404,6 +487,22 @@ internal sealed class OnnxDmlWorker : IDisposable
             if (score < confThres)
             {
                 continue;
+            }
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                probe = new OnnxDebugProbe(
+                    true,
+                    inputWidth,
+                    inputHeight,
+                    Read(0),
+                    Read(1),
+                    Read(2),
+                    Read(3),
+                    obj,
+                    bestClassScore,
+                    score);
             }
 
             boxes.Add((Read(0), Read(1), Math.Abs(Read(2)), Math.Abs(Read(3)), score));
