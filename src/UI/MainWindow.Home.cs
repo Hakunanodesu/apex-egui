@@ -1,4 +1,4 @@
-using ImGuiNET;
+﻿using ImGuiNET;
 using System.Numerics;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
@@ -168,6 +168,10 @@ public sealed partial class MainWindow
         {
             _smartCoreMappingState.RequestedEnabled = requestedSmartCoreEnabled;
             _viGEmMappingWorker?.SetRequestedEnabled(requestedSmartCoreEnabled);
+            if (!requestedSmartCoreEnabled)
+            {
+                CloseSmartCorePreviewWindow();
+            }
             RefreshSmartCoreState();
             PushAimAssistConfig();
             SyncSmartCoreVisionPipeline();
@@ -476,9 +480,9 @@ public sealed partial class MainWindow
         ImGui.TableSetColumnIndex(1);
         ImGui.BeginDisabled(_configFiles.Count == 0);
         var weaponNameColumnWidth = ImGui.CalcTextSize("武器名").X;
-        for (var i = 0; i < SpecialWeaponNames.Length; i++)
+        for (var i = 0; i < _specialWeaponNames.Length; i++)
         {
-            weaponNameColumnWidth = MathF.Max(weaponNameColumnWidth, ImGui.CalcTextSize(SpecialWeaponNames[i]).X);
+            weaponNameColumnWidth = MathF.Max(weaponNameColumnWidth, ImGui.CalcTextSize(_specialWeaponNames[i]).X);
         }
 
         var aimSnapColumnWidth = ImGui.CalcTextSize("瞄准吸附").X;
@@ -501,30 +505,33 @@ public sealed partial class MainWindow
             ImGui.TableSetupColumn("松手开火", ImGuiTableColumnFlags.WidthFixed, releaseFireColumnWidth);
             ImGui.TableHeadersRow();
 
-            for (var i = 0; i < SpecialWeaponNames.Length; i++)
+            for (var i = 0; i < _specialWeaponNames.Length; i++)
             {
                 ImGui.TableNextRow();
 
                 ImGui.TableSetColumnIndex(0);
                 ImGui.AlignTextToFramePadding();
-                ImGui.TextUnformatted(SpecialWeaponNames[i]);
+                ImGui.TextUnformatted(_specialWeaponNames[i]);
 
                 ImGui.TableSetColumnIndex(1);
                 if (ImGui.Checkbox($"##SpecialWeaponAimSnap_{i}", ref _specialWeaponAimSnapEnabled[i]))
                 {
                     TryWriteSpecialWeaponLogicValueToCurrentConfig(i, _specialWeaponAimSnapEnabled[i], _specialWeaponRapidFireEnabled[i], _specialWeaponReleaseFireEnabled[i]);
+                    PushAimAssistConfig();
                 }
 
                 ImGui.TableSetColumnIndex(2);
                 if (ImGui.Checkbox($"##SpecialWeaponRapidFire_{i}", ref _specialWeaponRapidFireEnabled[i]))
                 {
                     TryWriteSpecialWeaponLogicValueToCurrentConfig(i, _specialWeaponAimSnapEnabled[i], _specialWeaponRapidFireEnabled[i], _specialWeaponReleaseFireEnabled[i]);
+                    PushAimAssistConfig();
                 }
 
                 ImGui.TableSetColumnIndex(3);
                 if (ImGui.Checkbox($"##SpecialWeaponReleaseFire_{i}", ref _specialWeaponReleaseFireEnabled[i]))
                 {
                     TryWriteSpecialWeaponLogicValueToCurrentConfig(i, _specialWeaponAimSnapEnabled[i], _specialWeaponRapidFireEnabled[i], _specialWeaponReleaseFireEnabled[i]);
+                    PushAimAssistConfig();
                 }
             }
 
@@ -701,12 +708,16 @@ public sealed partial class MainWindow
 
             var previewWindowThread = new Thread(() =>
             {
+                const int WeaponPreviewGapPx = 0;
+                const int WeaponPreviewPaddingPx = 8;
                 var initialSize = Math.Max(1, _homeViewState.SnapOuterRange);
+                var initialWeaponImageHeight = Math.Max(1, WeaponTemplateCatalog.TemplateHeight);
+                var initialWeaponSectionHeight = initialWeaponImageHeight + WeaponPreviewPaddingPx * 2;
                 using var form = new SmartCorePreviewForm
                 {
                     Text = string.Empty,
                     StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen,
-                    ClientSize = new System.Drawing.Size(initialSize, initialSize),
+                    ClientSize = new System.Drawing.Size(initialSize, initialSize + WeaponPreviewGapPx + initialWeaponSectionHeight),
                     TopMost = true,
                     FormBorderStyle = System.Windows.Forms.FormBorderStyle.FixedSingle,
                     MaximizeBox = false,
@@ -734,6 +745,11 @@ public sealed partial class MainWindow
                 var frameHeight = 0;
                 string? frameError = null;
                 System.Drawing.Bitmap? cachedBitmap = null;
+                var sobelBuffer = Array.Empty<byte>();
+                var lastSobelFrameId = 0;
+                var sobelWidth = 0;
+                var sobelHeight = 0;
+                System.Drawing.Bitmap? cachedSobelBitmap = null;
 
                 var refreshTimer = new System.Windows.Forms.Timer { Interval = SmartCorePreviewIntervalMs };
                 refreshTimer.Tick += (_, _) =>
@@ -744,7 +760,9 @@ public sealed partial class MainWindow
                     }
 
                     var targetSize = Math.Max(1, _homeViewState.SnapOuterRange);
-                    var expectedClientSize = new System.Drawing.Size(targetSize, targetSize);
+                    var weaponImageHeight = Math.Max(1, WeaponTemplateCatalog.TemplateHeight);
+                    var weaponSectionHeight = weaponImageHeight + WeaponPreviewPaddingPx * 2;
+                    var expectedClientSize = new System.Drawing.Size(targetSize, targetSize + WeaponPreviewGapPx + weaponSectionHeight);
                     if (form.ClientSize != expectedClientSize)
                     {
                         form.ClientSize = expectedClientSize;
@@ -764,7 +782,19 @@ public sealed partial class MainWindow
                         frameHeight = 0;
                     }
 
-                    if (hasNewFrame || worker is null)
+                    var hasNewSobel = false;
+                    var weaponWorker = _weaponRecWorker;
+                    if (weaponWorker is not null)
+                    {
+                        hasNewSobel = weaponWorker.TryCopyLatestSobel(ref sobelBuffer, ref lastSobelFrameId, out sobelWidth, out sobelHeight);
+                    }
+                    else
+                    {
+                        sobelWidth = 0;
+                        sobelHeight = 0;
+                    }
+
+                    if (hasNewFrame || hasNewSobel || worker is null)
                     {
                         form.Invalidate();
                     }
@@ -777,74 +807,135 @@ public sealed partial class MainWindow
                     e.Graphics.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.NearestNeighbor;
                     e.Graphics.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.Half;
 
+                    var mainSize = Math.Max(1, _homeViewState.SnapOuterRange);
+                    var mainRect = new System.Drawing.Rectangle(0, 0, mainSize, mainSize);
                     if (frameWidth <= 0 || frameHeight <= 0 || frameBuffer.Length != frameWidth * frameHeight * 4)
                     {
                         var statusText = string.IsNullOrWhiteSpace(frameError) ? "绛夊緟鎹曡幏鐢婚潰..." : $"鎹曡幏閿欒: {frameError}";
                         using var statusBrush = new System.Drawing.SolidBrush(System.Drawing.Color.Gainsboro);
-                        e.Graphics.DrawString(statusText, form.Font, statusBrush, new System.Drawing.PointF(12f, 12f));
-                        return;
+                        e.Graphics.DrawString(statusText, form.Font, statusBrush, new System.Drawing.PointF(mainRect.X + 12f, mainRect.Y + 12f));
                     }
-
-                    var clientRect = new System.Drawing.Rectangle(0, 0, form.ClientSize.Width, form.ClientSize.Height);
-                    var scale = Math.Min(clientRect.Width / (float)frameWidth, clientRect.Height / (float)frameHeight);
-                    scale = Math.Max(scale, 1f);
-                    var drawWidth = Math.Max(1, (int)MathF.Round(frameWidth * scale));
-                    var drawHeight = Math.Max(1, (int)MathF.Round(frameHeight * scale));
-                    var drawRect = new System.Drawing.Rectangle(
-                        clientRect.X + (clientRect.Width - drawWidth) / 2,
-                        clientRect.Y + (clientRect.Height - drawHeight) / 2,
-                        drawWidth,
-                        drawHeight);
-
-                    if (cachedBitmap is null || cachedBitmap.Width != frameWidth || cachedBitmap.Height != frameHeight)
+                    else
                     {
-                        cachedBitmap?.Dispose();
-                        cachedBitmap = new System.Drawing.Bitmap(frameWidth, frameHeight, PixelFormat.Format32bppArgb);
-                    }
+                        var scale = Math.Min(mainRect.Width / (float)frameWidth, mainRect.Height / (float)frameHeight);
+                        scale = Math.Max(scale, 1f);
+                        var drawWidth = Math.Max(1, (int)MathF.Round(frameWidth * scale));
+                        var drawHeight = Math.Max(1, (int)MathF.Round(frameHeight * scale));
+                        var drawRect = new System.Drawing.Rectangle(
+                            mainRect.X + (mainRect.Width - drawWidth) / 2,
+                            mainRect.Y + (mainRect.Height - drawHeight) / 2,
+                            drawWidth,
+                            drawHeight);
 
-                    var bitmapData = cachedBitmap.LockBits(
-                        new System.Drawing.Rectangle(0, 0, frameWidth, frameHeight),
-                        ImageLockMode.WriteOnly,
-                        PixelFormat.Format32bppArgb);
-                    try
-                    {
-                        Marshal.Copy(frameBuffer, 0, bitmapData.Scan0, frameBuffer.Length);
-                    }
-                    finally
-                    {
-                        cachedBitmap.UnlockBits(bitmapData);
-                    }
-
-                    e.Graphics.DrawImage(cachedBitmap, drawRect);
-
-                    var boxes = _onnxWorker?.GetDebugBoxes() ?? Array.Empty<OnnxDebugBox>();
-                    if (boxes.Length > 0)
-                    {
-                        using var boxPen = new System.Drawing.Pen(System.Drawing.Color.Red, 2f);
-                        for (var i = 0; i < boxes.Length; i++)
+                        if (cachedBitmap is null || cachedBitmap.Width != frameWidth || cachedBitmap.Height != frameHeight)
                         {
-                            var box = boxes[i];
-                            var x1 = box.X - box.W * 0.5f;
-                            var y1 = box.Y - box.H * 0.5f;
-                            var x2 = box.X + box.W * 0.5f;
-                            var y2 = box.Y + box.H * 0.5f;
+                            cachedBitmap?.Dispose();
+                            cachedBitmap = new System.Drawing.Bitmap(frameWidth, frameHeight, PixelFormat.Format32bppArgb);
+                        }
 
-                            var minX = Math.Clamp(MathF.Min(x1, x2), 0f, frameWidth);
-                            var minY = Math.Clamp(MathF.Min(y1, y2), 0f, frameHeight);
-                            var maxX = Math.Clamp(MathF.Max(x1, x2), 0f, frameWidth);
-                            var maxY = Math.Clamp(MathF.Max(y1, y2), 0f, frameHeight);
+                        var bitmapData = cachedBitmap.LockBits(
+                            new System.Drawing.Rectangle(0, 0, frameWidth, frameHeight),
+                            ImageLockMode.WriteOnly,
+                            PixelFormat.Format32bppArgb);
+                        try
+                        {
+                            Marshal.Copy(frameBuffer, 0, bitmapData.Scan0, frameBuffer.Length);
+                        }
+                        finally
+                        {
+                            cachedBitmap.UnlockBits(bitmapData);
+                        }
 
-                            var overlayRect = new System.Drawing.RectangleF(
-                                drawRect.Left + minX / frameWidth * drawRect.Width,
-                                drawRect.Top + minY / frameHeight * drawRect.Height,
-                                (maxX - minX) / frameWidth * drawRect.Width,
-                                (maxY - minY) / frameHeight * drawRect.Height);
+                        e.Graphics.DrawImage(cachedBitmap, drawRect);
 
-                            if (overlayRect.Width > 1f && overlayRect.Height > 1f)
+                        var boxes = _onnxWorker?.GetDebugBoxes() ?? Array.Empty<OnnxDebugBox>();
+                        if (boxes.Length > 0)
+                        {
+                            using var boxPen = new System.Drawing.Pen(System.Drawing.Color.Red, 2f);
+                            for (var i = 0; i < boxes.Length; i++)
                             {
-                                e.Graphics.DrawRectangle(boxPen, overlayRect.X, overlayRect.Y, overlayRect.Width, overlayRect.Height);
+                                var box = boxes[i];
+                                var x1 = box.X - box.W * 0.5f;
+                                var y1 = box.Y - box.H * 0.5f;
+                                var x2 = box.X + box.W * 0.5f;
+                                var y2 = box.Y + box.H * 0.5f;
+
+                                var minX = Math.Clamp(MathF.Min(x1, x2), 0f, frameWidth);
+                                var minY = Math.Clamp(MathF.Min(y1, y2), 0f, frameHeight);
+                                var maxX = Math.Clamp(MathF.Max(x1, x2), 0f, frameWidth);
+                                var maxY = Math.Clamp(MathF.Max(y1, y2), 0f, frameHeight);
+
+                                var overlayRect = new System.Drawing.RectangleF(
+                                    drawRect.Left + minX / frameWidth * drawRect.Width,
+                                    drawRect.Top + minY / frameHeight * drawRect.Height,
+                                    (maxX - minX) / frameWidth * drawRect.Width,
+                                    (maxY - minY) / frameHeight * drawRect.Height);
+
+                                if (overlayRect.Width > 1f && overlayRect.Height > 1f)
+                                {
+                                    e.Graphics.DrawRectangle(boxPen, overlayRect.X, overlayRect.Y, overlayRect.Width, overlayRect.Height);
+                                }
                             }
                         }
+                    }
+
+                    var sobelSectionRect = new System.Drawing.Rectangle(
+                        0,
+                        mainRect.Bottom + WeaponPreviewGapPx,
+                        form.ClientSize.Width,
+                        Math.Max(1, form.ClientSize.Height - (mainRect.Bottom + WeaponPreviewGapPx)));
+                    using var sobelSectionBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(26, 30, 36));
+                    e.Graphics.FillRectangle(sobelSectionBrush, sobelSectionRect);
+
+                    if (sobelWidth > 0 && sobelHeight > 0 && sobelBuffer.Length == sobelWidth * sobelHeight)
+                    {
+                        if (cachedSobelBitmap is null || cachedSobelBitmap.Width != sobelWidth || cachedSobelBitmap.Height != sobelHeight)
+                        {
+                            cachedSobelBitmap?.Dispose();
+                            cachedSobelBitmap = new System.Drawing.Bitmap(sobelWidth, sobelHeight, PixelFormat.Format32bppArgb);
+                        }
+
+                        var rgba = new byte[sobelWidth * sobelHeight * 4];
+                        for (var i = 0; i < sobelBuffer.Length; i++)
+                        {
+                            var g = sobelBuffer[i];
+                            var dst = i * 4;
+                            rgba[dst + 0] = g;
+                            rgba[dst + 1] = g;
+                            rgba[dst + 2] = g;
+                            rgba[dst + 3] = 255;
+                        }
+
+                        var sobelBitmapData = cachedSobelBitmap.LockBits(
+                            new System.Drawing.Rectangle(0, 0, sobelWidth, sobelHeight),
+                            ImageLockMode.WriteOnly,
+                            PixelFormat.Format32bppArgb);
+                        try
+                        {
+                            Marshal.Copy(rgba, 0, sobelBitmapData.Scan0, rgba.Length);
+                        }
+                        finally
+                        {
+                            cachedSobelBitmap.UnlockBits(sobelBitmapData);
+                        }
+
+                        var sobelDrawW = sobelWidth;
+                        var sobelDrawH = sobelHeight;
+                        var sobelDrawRect = new System.Drawing.Rectangle(
+                            sobelSectionRect.X + WeaponPreviewPaddingPx,
+                            sobelSectionRect.Y + WeaponPreviewPaddingPx,
+                            sobelDrawW,
+                            sobelDrawH);
+                        e.Graphics.DrawImage(cachedSobelBitmap, sobelDrawRect);
+                    }
+                    else
+                    {
+                        using var statusBrush = new System.Drawing.SolidBrush(System.Drawing.Color.Gainsboro);
+                        e.Graphics.DrawString(
+                            "Weapon Sobel: waiting...",
+                            form.Font,
+                            statusBrush,
+                            new System.Drawing.PointF(sobelSectionRect.X + 12f, sobelSectionRect.Y + 10f));
                     }
                 };
 
@@ -863,6 +954,7 @@ public sealed partial class MainWindow
                     refreshTimer.Stop();
                     refreshTimer.Dispose();
                     cachedBitmap?.Dispose();
+                    cachedSobelBitmap?.Dispose();
                     lock (_smartCorePreviewWindowLock)
                     {
                         _smartCorePreviewWindow = null;

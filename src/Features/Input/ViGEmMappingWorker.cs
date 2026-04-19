@@ -14,6 +14,8 @@ internal readonly record struct ViGEmMappingSnapshot(
 internal sealed class ViGEmMappingWorker : IDisposable
 {
     private const double TargetLoopIntervalMs = 1000.0 / 500.0;
+    private const int TriggerTimingUnitMs = 20;
+    private const int ReleaseToFirePulseMs = 100;
     private readonly object _sync = new();
     private readonly Thread _thread;
     private readonly SmartCoreAimAssistService _smartCoreAimAssistService = new();
@@ -30,6 +32,7 @@ internal sealed class ViGEmMappingWorker : IDisposable
     private string? _lastError;
     private SmartCoreAimAssistConfigState _aimAssistConfigState = SmartCoreAimAssistConfigState.Disabled;
     private SmartCoreDetectionState _aimAssistDetectionState = SmartCoreDetectionState.Empty;
+    private WeaponRecognitionResultState _weaponRecognitionState = WeaponRecognitionResultState.Empty;
 
     public ViGEmMappingWorker()
     {
@@ -197,10 +200,24 @@ internal sealed class ViGEmMappingWorker : IDisposable
         }
     }
 
+    public void SetWeaponRecognition(in WeaponRecognitionResultState state)
+    {
+        lock (_sync)
+        {
+            _weaponRecognitionState = state;
+        }
+    }
+
     private void WorkerMain()
     {
         var loopTimer = Stopwatch.StartNew();
         var nextLoopAtMs = 0.0;
+        var rapidFireHalfPeriod = TimeSpan.FromMilliseconds(TriggerTimingUnitMs);
+        var releasePulseDuration = TimeSpan.FromMilliseconds(ReleaseToFirePulseMs);
+        var rapidHigh = false;
+        var rapidLastToggleAt = DateTime.UtcNow;
+        var releasePrevPressed = false;
+        DateTime? releasePulseUntil = null;
         while (_running)
         {
             WaitForNextTick(loopTimer, ref nextLoopAtMs, TargetLoopIntervalMs);
@@ -210,6 +227,7 @@ internal sealed class ViGEmMappingWorker : IDisposable
             bool hasSelectedGamepad;
             SmartCoreAimAssistConfigState aimAssistConfigState;
             SmartCoreDetectionState aimAssistDetectionState;
+            WeaponRecognitionResultState weaponRecognitionState;
             lock (_sync)
             {
                 sdlWorker = _sdlGamepadWorker;
@@ -218,6 +236,7 @@ internal sealed class ViGEmMappingWorker : IDisposable
                 hasSelectedGamepad = _hasSelectedGamepad;
                 aimAssistConfigState = _aimAssistConfigState;
                 aimAssistDetectionState = _aimAssistDetectionState;
+                weaponRecognitionState = _weaponRecognitionState;
             }
 
             if (sdlWorker is null || !isConnected || !requestedEnabled || !hasSelectedGamepad)
@@ -243,6 +262,69 @@ internal sealed class ViGEmMappingWorker : IDisposable
                 continue;
             }
 
+            var recognizedWeaponName = weaponRecognitionState.WeaponName;
+            var isAimSnapOverrideWeapon = ContainsWeaponName(aimAssistConfigState.AimSnapWeapons, recognizedWeaponName);
+            var isRapidFireWeapon = ContainsWeaponName(aimAssistConfigState.RapidFireWeapons, recognizedWeaponName);
+            var isReleaseFireWeapon = ContainsWeaponName(aimAssistConfigState.ReleaseFireWeapons, recognizedWeaponName);
+            var rightTriggerPressed = input.RightTrigger > 0;
+            short mappedRightTrigger = input.RightTrigger;
+
+            if (isReleaseFireWeapon)
+            {
+                if (rightTriggerPressed)
+                {
+                    mappedRightTrigger = 0;
+                    releasePrevPressed = true;
+                    releasePulseUntil = null;
+                }
+                else
+                {
+                    if (releasePrevPressed)
+                    {
+                        releasePrevPressed = false;
+                        releasePulseUntil = DateTime.UtcNow + releasePulseDuration;
+                    }
+
+                    if (releasePulseUntil.HasValue && DateTime.UtcNow < releasePulseUntil.Value)
+                    {
+                        mappedRightTrigger = short.MaxValue;
+                    }
+                    else
+                    {
+                        mappedRightTrigger = 0;
+                        releasePulseUntil = null;
+                    }
+                }
+            }
+            else
+            {
+                releasePrevPressed = false;
+                releasePulseUntil = null;
+            }
+
+            if (isRapidFireWeapon && rightTriggerPressed && !isReleaseFireWeapon)
+            {
+                var now = DateTime.UtcNow;
+                var elapsed = now - rapidLastToggleAt;
+                if (elapsed >= rapidFireHalfPeriod)
+                {
+                    var steps = Math.Max(1, (int)(elapsed.Ticks / rapidFireHalfPeriod.Ticks));
+                    if ((steps & 1) == 1)
+                    {
+                        rapidHigh = !rapidHigh;
+                    }
+
+                    rapidLastToggleAt = rapidLastToggleAt.AddTicks(rapidFireHalfPeriod.Ticks * steps);
+                }
+
+                mappedRightTrigger = rapidHigh ? input.RightTrigger : (short)0;
+            }
+            else
+            {
+                rapidHigh = false;
+                rapidLastToggleAt = DateTime.UtcNow;
+            }
+
             var aimAssistResult = _smartCoreAimAssistService.Evaluate(new SmartCoreAimAssistContext(
                 aimAssistConfigState.IsEnabled,
                 aimAssistConfigState.IsMappingActive,
@@ -256,6 +338,7 @@ internal sealed class ViGEmMappingWorker : IDisposable
                 aimAssistConfigState.SnapHipfireStrengthFactor,
                 aimAssistConfigState.SnapHeight,
                 aimAssistConfigState.SnapInnerInterpolationTypeIndex,
+                isAimSnapOverrideWeapon,
                 input,
                 aimAssistDetectionState.Boxes));
 
@@ -265,7 +348,7 @@ internal sealed class ViGEmMappingWorker : IDisposable
                     CombineStickAxis(input.RightX, aimAssistResult.IsActive ? aimAssistResult.RightX : (short)0),
                     InvertStickY(CombineStickAxis(input.RightY, aimAssistResult.IsActive ? aimAssistResult.RightY : (short)0)),
                     ToXboxTrigger(input.LeftTrigger),
-                    ToXboxTrigger(input.RightTrigger),
+                    ToXboxTrigger(mappedRightTrigger),
                     input.A,
                     input.B,
                     input.X,
@@ -427,6 +510,27 @@ internal sealed class ViGEmMappingWorker : IDisposable
         {
             _client = null;
         }
+    }
+
+    private static bool ContainsWeaponName(IReadOnlyList<string>? weaponNames, string? weaponName)
+    {
+        if (string.IsNullOrWhiteSpace(weaponName) ||
+            string.Equals(weaponName, WeaponTemplateCatalog.EmptyHandName, StringComparison.OrdinalIgnoreCase) ||
+            weaponNames is null ||
+            weaponNames.Count == 0)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < weaponNames.Count; i++)
+        {
+            if (string.Equals(weaponNames[i], weaponName, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static void WaitForNextTick(Stopwatch loopTimer, ref double nextLoopAtMs, double intervalMs)

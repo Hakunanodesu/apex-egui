@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Threading;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
@@ -107,7 +107,7 @@ internal readonly struct OnnxDebugBox
     }
 }
 
-internal sealed class OnnxService : IDisposable
+internal sealed class OnnxWorker : IDisposable
 {
     private readonly object _sync = new();
     private readonly Thread _thread;
@@ -132,15 +132,15 @@ internal sealed class OnnxService : IDisposable
     private long _windowInferenceCount;
 
     private OnnxInferenceSnapshot _snapshot = new(
-        "未启动",
+        "Not started",
         0.0,
         0.0,
         0.0,
         0.0,
         0,
-        "无");
+        "None");
 
-    public OnnxService(OnnxModelConfig model)
+    public OnnxWorker(OnnxModelConfig model)
     {
         _model = model;
         _thread = new Thread(WorkerMain)
@@ -223,7 +223,7 @@ internal sealed class OnnxService : IDisposable
             var inputDims = ResolveInputShape(input.Value.Dimensions, _model.InputHeight, _model.InputWidth);
             var layout = DetectLayout(inputDims);
 
-            SetStatus("推理中");
+            SetStatus("Running");
             while (_running)
             {
                 _frameArrived.WaitOne(50);
@@ -292,7 +292,7 @@ internal sealed class OnnxService : IDisposable
         }
         catch (Exception ex)
         {
-            SetStatus($"推理失败: {ex.GetType().Name}: {ex.Message}");
+            SetStatus($"鎺ㄧ悊澶辫触: {ex.GetType().Name}: {ex.Message}");
             _running = false;
         }
     }
@@ -325,7 +325,7 @@ internal sealed class OnnxService : IDisposable
                 var avg = _windowSamples.Count > 0 ? _windowSamples.Average() : 0.0;
                 var p95 = Percentile(_windowSamples, 0.95);
                 var p99 = Percentile(_windowSamples, 0.99);
-                _snapshot = new OnnxInferenceSnapshot("推理中", fps, avg, p95, p99, detectionCount, outputSummary);
+                _snapshot = new OnnxInferenceSnapshot("Running", fps, avg, p95, p99, detectionCount, outputSummary);
                 _windowSamples.Clear();
                 _windowInferenceCount = 0;
                 _windowStartUtc = DateTime.UtcNow;
@@ -434,7 +434,7 @@ internal sealed class OnnxService : IDisposable
             }
         }
 
-        return parts.Count == 0 ? "无输出" : string.Join(", ", parts);
+        return parts.Count == 0 ? "No output" : string.Join(", ", parts);
     }
 
     private static int CountDetections(
@@ -669,3 +669,4 @@ internal sealed class OnnxService : IDisposable
         _frameArrived.Dispose();
     }
 }
+

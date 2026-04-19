@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Threading;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -22,7 +22,7 @@ internal readonly struct CaptureTelemetry
     }
 }
 
-internal sealed class DesktopCaptureService : IDisposable
+internal sealed class DesktopCaptureWorker : IDisposable
 {
     private const double TargetCaptureIntervalMs = 1000.0 / 60.0;
     private readonly object _sync = new();
@@ -33,9 +33,13 @@ internal sealed class DesktopCaptureService : IDisposable
     private int _latestHeight;
     private int _latestFrameId;
     private int _captureFrameId;
+    private byte[] _latestWeaponRoi = Array.Empty<byte>();
+    private int _latestWeaponRoiWidth;
+    private int _latestWeaponRoiHeight;
+    private int _latestWeaponRoiFrameId;
     private bool _previewFrameCacheEnabled;
     private string? _lastError;
-    private OnnxService? _frameConsumer;
+    private OnnxWorker? _frameConsumer;
 
     private long _pollCount;
     private long _successCount;
@@ -45,7 +49,7 @@ internal sealed class DesktopCaptureService : IDisposable
     private int _requestedCaptureWidth = 320;
     private int _requestedCaptureHeight = 320;
 
-    public DesktopCaptureService()
+    public DesktopCaptureWorker()
     {
         _thread = new Thread(CaptureThreadMain)
         {
@@ -107,7 +111,30 @@ internal sealed class DesktopCaptureService : IDisposable
         }
     }
 
-    public void SetFrameConsumer(OnnxService? frameConsumer)
+    public bool TryCopyLatestWeaponRoi(ref byte[] uploadBuffer, ref int lastFrameId, out int width, out int height, out string? error)
+    {
+        lock (_sync)
+        {
+            error = _lastError;
+            width = _latestWeaponRoiWidth;
+            height = _latestWeaponRoiHeight;
+            if (_latestWeaponRoiFrameId == 0 || _latestWeaponRoiFrameId == lastFrameId)
+            {
+                return false;
+            }
+
+            if (uploadBuffer.Length != _latestWeaponRoi.Length)
+            {
+                uploadBuffer = new byte[_latestWeaponRoi.Length];
+            }
+
+            Buffer.BlockCopy(_latestWeaponRoi, 0, uploadBuffer, 0, _latestWeaponRoi.Length);
+            lastFrameId = _latestWeaponRoiFrameId;
+            return true;
+        }
+    }
+
+    public void SetFrameConsumer(OnnxWorker? frameConsumer)
     {
         lock (_sync)
         {
@@ -126,6 +153,10 @@ internal sealed class DesktopCaptureService : IDisposable
                 _latestWidth = 0;
                 _latestHeight = 0;
                 _latestFrameId = 0;
+                _latestWeaponRoi = Array.Empty<byte>();
+                _latestWeaponRoiWidth = 0;
+                _latestWeaponRoiHeight = 0;
+                _latestWeaponRoiFrameId = 0;
             }
         }
     }
@@ -159,10 +190,18 @@ internal sealed class DesktopCaptureService : IDisposable
 
                 duplicator.SetCaptureRegion(requestedWidth, requestedHeight);
                 timer.Restart();
-                var ok = duplicator.TryCaptureFrame(1, out var frameData, out var width, out var height, out var error);
+                var ok = duplicator.TryCaptureFrame(
+                    1,
+                    out var frameData,
+                    out var width,
+                    out var height,
+                    out var weaponRoiData,
+                    out var weaponRoiWidth,
+                    out var weaponRoiHeight,
+                    out var error);
                 timer.Stop();
                 var shouldBackoff = false;
-                OnnxService? frameConsumer = null;
+                OnnxWorker? frameConsumer = null;
                 var frameId = 0;
 
                 lock (_sync)
@@ -190,6 +229,19 @@ internal sealed class DesktopCaptureService : IDisposable
                             _latestWidth = width;
                             _latestHeight = height;
                             _latestFrameId++;
+                        }
+
+                        if (weaponRoiWidth > 0 && weaponRoiHeight > 0 && weaponRoiData.Length == weaponRoiWidth * weaponRoiHeight * 3)
+                        {
+                            if (_latestWeaponRoi.Length != weaponRoiData.Length)
+                            {
+                                _latestWeaponRoi = new byte[weaponRoiData.Length];
+                            }
+
+                            Buffer.BlockCopy(weaponRoiData, 0, _latestWeaponRoi, 0, weaponRoiData.Length);
+                            _latestWeaponRoiWidth = weaponRoiWidth;
+                            _latestWeaponRoiHeight = weaponRoiHeight;
+                            _latestWeaponRoiFrameId++;
                         }
                     }
                     else if (!string.IsNullOrWhiteSpace(error))
@@ -236,11 +288,18 @@ internal sealed class DesktopCaptureService : IDisposable
 
 internal sealed class DxgiDesktopDuplicator : IDisposable
 {
+    private const float WeaponRoiBaseWidth = 1920f;
+    private const float WeaponRoiOffsetX = 384f;
+    private const float WeaponRoiOffsetY = 122f;
+    private const float WeaponRoiBaseWidthPixels = WeaponTemplateCatalog.TemplateWidth;
+    private const float WeaponRoiBaseHeightPixels = WeaponTemplateCatalog.TemplateHeight;
+
     private readonly ID3D11Device _device;
     private readonly ID3D11DeviceContext _context;
     private readonly IDXGIOutputDuplication _duplication;
     private readonly ID3D11Texture2D _stagingTexture;
     private byte[] _frameBuffer = Array.Empty<byte>();
+    private byte[] _weaponRoiBuffer = Array.Empty<byte>();
     private readonly object _regionLock = new();
     private readonly int _outputWidth;
     private readonly int _outputHeight;
@@ -334,11 +393,22 @@ internal sealed class DxgiDesktopDuplicator : IDisposable
         }
     }
 
-    public bool TryCaptureFrame(int timeoutMs, out byte[] frameData, out int width, out int height, out string? error)
+    public unsafe bool TryCaptureFrame(
+        int timeoutMs,
+        out byte[] frameData,
+        out int width,
+        out int height,
+        out byte[] weaponRoiData,
+        out int weaponRoiWidth,
+        out int weaponRoiHeight,
+        out string? error)
     {
         frameData = Array.Empty<byte>();
         width = 0;
         height = 0;
+        weaponRoiData = Array.Empty<byte>();
+        weaponRoiWidth = 0;
+        weaponRoiHeight = 0;
         error = null;
 
         if (_disposed)
@@ -393,6 +463,35 @@ internal sealed class DxgiDesktopDuplicator : IDisposable
                 frameData = frameBuffer;
                 width = captureWidth;
                 height = captureHeight;
+
+                var (roiLeft, roiTop, roiWidth, roiHeight) = CalcWeaponRoi(_outputWidth, _outputHeight);
+                if (roiWidth > 0 && roiHeight > 0)
+                {
+                    var requiredBytes = roiWidth * roiHeight * 3;
+                    if (_weaponRoiBuffer.Length != requiredBytes)
+                    {
+                        _weaponRoiBuffer = new byte[requiredBytes];
+                    }
+
+                    var srcPtr = (byte*)mapped.DataPointer;
+                    for (var y = 0; y < roiHeight; y++)
+                    {
+                        var sourceY = roiTop + y;
+                        var sourceOffset = sourceY * mapped.RowPitch + roiLeft * 4;
+                        var destination = y * roiWidth * 3;
+                        for (var x = 0; x < roiWidth; x++)
+                        {
+                            var pixelOffset = sourceOffset + x * 4;
+                            _weaponRoiBuffer[destination + x * 3 + 0] = srcPtr[pixelOffset + 2]; // R
+                            _weaponRoiBuffer[destination + x * 3 + 1] = srcPtr[pixelOffset + 1]; // G
+                            _weaponRoiBuffer[destination + x * 3 + 2] = srcPtr[pixelOffset + 0]; // B
+                        }
+                    }
+
+                    weaponRoiData = _weaponRoiBuffer;
+                    weaponRoiWidth = roiWidth;
+                    weaponRoiHeight = roiHeight;
+                }
             }
             finally
             {
@@ -429,4 +528,20 @@ internal sealed class DxgiDesktopDuplicator : IDisposable
         _device.Dispose();
         _disposed = true;
     }
+
+    private static (int Left, int Top, int Width, int Height) CalcWeaponRoi(int frameWidth, int frameHeight)
+    {
+        var scale = frameWidth / WeaponRoiBaseWidth;
+        var left = frameWidth - (int)MathF.Round(WeaponRoiOffsetX * scale);
+        var top = frameHeight - (int)MathF.Round(WeaponRoiOffsetY * scale);
+        var width = (int)MathF.Round(WeaponRoiBaseWidthPixels * scale);
+        var height = (int)MathF.Round(WeaponRoiBaseHeightPixels * scale);
+
+        left = Math.Clamp(left, 0, frameWidth);
+        top = Math.Clamp(top, 0, frameHeight);
+        width = Math.Clamp(width, 0, frameWidth - left);
+        height = Math.Clamp(height, 0, frameHeight - top);
+        return (left, top, width, height);
+    }
 }
+

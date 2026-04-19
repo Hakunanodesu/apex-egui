@@ -1,9 +1,10 @@
-public sealed partial class MainWindow
+﻿public sealed partial class MainWindow
 {
     private readonly record struct VisionPipelineConfig(string ModelPath, int CaptureWidth, int CaptureHeight);
 
-    private DesktopCaptureService? _dxgiWorker;
-    private OnnxService? _onnxWorker;
+    private DesktopCaptureWorker? _dxgiWorker;
+    private OnnxWorker? _onnxWorker;
+    private WeaponRecognitionWorker? _weaponRecWorker;
     private VisionPipelineConfig? _currentVisionConfig;
 
     private void SyncSmartCoreVisionPipeline()
@@ -67,11 +68,13 @@ public sealed partial class MainWindow
         try
         {
             StopVisionPipeline();
-            _dxgiWorker = new DesktopCaptureService();
+            _dxgiWorker = new DesktopCaptureWorker();
             _dxgiWorker.SetCaptureRegion(config.CaptureWidth, config.CaptureHeight);
             _dxgiWorker.SetPreviewFrameCacheEnabled(IsSmartCorePreviewWindowOpen());
-            _onnxWorker = new OnnxService(model);
+            _onnxWorker = new OnnxWorker(model);
             _onnxWorker.SetDetectionConsumer(_viGEmMappingWorker);
+            _weaponRecWorker = new WeaponRecognitionWorker(_dxgiWorker);
+            _weaponRecWorker.SetConsumer(_viGEmMappingWorker);
             _dxgiWorker.SetFrameConsumer(_onnxWorker);
             _currentVisionConfig = config;
         }
@@ -87,9 +90,13 @@ public sealed partial class MainWindow
         _dxgiWorker?.SetFrameConsumer(null);
         _onnxWorker?.Dispose();
         _onnxWorker = null;
+        _weaponRecWorker?.Dispose();
+        _weaponRecWorker = null;
         _dxgiWorker?.Dispose();
         _dxgiWorker = null;
         _currentVisionConfig = null;
         _viGEmMappingWorker?.SetAimAssistDetections(SmartCoreDetectionState.Empty);
+        _viGEmMappingWorker?.SetWeaponRecognition(WeaponRecognitionResultState.Empty);
     }
 }
+

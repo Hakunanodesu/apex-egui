@@ -27,29 +27,17 @@ public sealed partial class MainWindow : GameWindow
 
     private readonly List<OnnxModelConfig> _onnxModels = new();
     private int _onnxTopSelectedModelIndex = -1;
-    private static readonly string[] HomeSnapModeOptions = { "开火吸附", "瞄准吸附" };
+    private static readonly string[] HomeSnapModeOptions = { "开火吸附", "瞄准 + 开火吸附" };
     private static readonly string[] SnapInnerInterpolationTypeOptions = { "Linear", "Quadratic" };
-    private static readonly string[] SpecialWeaponNames =
-    {
-        "30-30",
-        "g7",
-        "kraber",
-        "longbow",
-        "mastiff",
-        "p2020_single",
-        "peacekeeper",
-        "sentinel",
-        "triple_take",
-        "wingman"
-    };
     private const string SpecialWeaponLogicConfigKey = "specialWeaponLogic";
     private const string AimSnapWeaponListConfigKey = "aimSnapWeapons";
     private const string RapidFireWeaponListConfigKey = "rapidFireWeapons";
     private const string ReleaseFireWeaponListConfigKey = "releaseFireWeapons";
     private readonly HomeViewState _homeViewState = new();
-    private readonly bool[] _specialWeaponAimSnapEnabled = new bool[SpecialWeaponNames.Length];
-    private readonly bool[] _specialWeaponRapidFireEnabled = new bool[SpecialWeaponNames.Length];
-    private readonly bool[] _specialWeaponReleaseFireEnabled = new bool[SpecialWeaponNames.Length];
+    private readonly string[] _specialWeaponNames;
+    private bool[] _specialWeaponAimSnapEnabled;
+    private bool[] _specialWeaponRapidFireEnabled;
+    private bool[] _specialWeaponReleaseFireEnabled;
     private readonly List<string> _configFiles = new();
     private int _selectedConfigFileIndex;
     private int _homeSelectedGamepadIndex;
@@ -73,6 +61,10 @@ public sealed partial class MainWindow : GameWindow
     public MainWindow(GameWindowSettings gameWindowSettings, NativeWindowSettings nativeWindowSettings)
         : base(gameWindowSettings, nativeWindowSettings)
     {
+        _specialWeaponNames = WeaponTemplateCatalog.GetWeaponNames();
+        _specialWeaponAimSnapEnabled = new bool[_specialWeaponNames.Length];
+        _specialWeaponRapidFireEnabled = new bool[_specialWeaponNames.Length];
+        _specialWeaponReleaseFireEnabled = new bool[_specialWeaponNames.Length];
         _configStore = new ConfigStore(_configRepository);
     }
 
@@ -416,6 +408,7 @@ public sealed partial class MainWindow : GameWindow
     {
         _smartCoreMappingState.RequestedEnabled = false;
         _viGEmMappingWorker?.SetRequestedEnabled(false);
+        CloseSmartCorePreviewWindow();
         _onnxTopSelectedModelIndex = -1;
         _homeViewState.ResetSnapSettings(
             0,
@@ -454,7 +447,7 @@ public sealed partial class MainWindow : GameWindow
             AimSnapWeaponListConfigKey,
             RapidFireWeaponListConfigKey,
             ReleaseFireWeaponListConfigKey,
-            SpecialWeaponNames,
+            _specialWeaponNames,
             weaponIndex,
             aimSnapEnabled,
             rapidFireEnabled,
@@ -473,7 +466,7 @@ public sealed partial class MainWindow : GameWindow
             AimSnapWeaponListConfigKey,
             RapidFireWeaponListConfigKey,
             ReleaseFireWeaponListConfigKey,
-            SpecialWeaponNames,
+            _specialWeaponNames,
             _specialWeaponAimSnapEnabled,
             _specialWeaponRapidFireEnabled,
             _specialWeaponReleaseFireEnabled);
@@ -789,8 +782,30 @@ public sealed partial class MainWindow : GameWindow
             _homeViewState.SnapVerticalStrengthFactor,
             _homeViewState.SnapHipfireStrengthFactor,
             _homeViewState.SnapHeight,
-            _homeViewState.SnapInnerInterpolationTypeIndex);
+            _homeViewState.SnapInnerInterpolationTypeIndex,
+            BuildEnabledWeaponNameList(_specialWeaponAimSnapEnabled),
+            BuildEnabledWeaponNameList(_specialWeaponRapidFireEnabled),
+            BuildEnabledWeaponNameList(_specialWeaponReleaseFireEnabled));
         _viGEmMappingWorker.SetAimAssistConfig(config);
+    }
+
+    private string[] BuildEnabledWeaponNameList(IReadOnlyList<bool> enabledFlags)
+    {
+        if (_specialWeaponNames.Length == 0 || enabledFlags.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var enabled = new List<string>(_specialWeaponNames.Length);
+        for (var i = 0; i < _specialWeaponNames.Length; i++)
+        {
+            if (i < enabledFlags.Count && enabledFlags[i])
+            {
+                enabled.Add(_specialWeaponNames[i]);
+            }
+        }
+
+        return enabled.ToArray();
     }
 
     private void RefreshSmartCoreState()

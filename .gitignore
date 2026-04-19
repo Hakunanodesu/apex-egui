@@ -5,6 +5,7 @@
 
 bin/
 obj/
+out/
 *.ini
 *.sln
 

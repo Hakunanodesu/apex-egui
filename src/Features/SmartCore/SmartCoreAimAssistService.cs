@@ -39,6 +39,9 @@ internal readonly struct SmartCoreAimAssistConfigState
     public readonly float SnapHipfireStrengthFactor;
     public readonly float SnapHeight;
     public readonly int SnapInnerInterpolationTypeIndex;
+    public readonly string[] AimSnapWeapons;
+    public readonly string[] RapidFireWeapons;
+    public readonly string[] ReleaseFireWeapons;
 
     public SmartCoreAimAssistConfigState(
         bool isEnabled,
@@ -52,7 +55,10 @@ internal readonly struct SmartCoreAimAssistConfigState
         float snapVerticalStrengthFactor,
         float snapHipfireStrengthFactor,
         float snapHeight,
-        int snapInnerInterpolationTypeIndex)
+        int snapInnerInterpolationTypeIndex,
+        string[] aimSnapWeapons,
+        string[] rapidFireWeapons,
+        string[] releaseFireWeapons)
     {
         IsEnabled = isEnabled;
         IsMappingActive = isMappingActive;
@@ -66,6 +72,9 @@ internal readonly struct SmartCoreAimAssistConfigState
         SnapHipfireStrengthFactor = snapHipfireStrengthFactor;
         SnapHeight = snapHeight;
         SnapInnerInterpolationTypeIndex = snapInnerInterpolationTypeIndex;
+        AimSnapWeapons = aimSnapWeapons;
+        RapidFireWeapons = rapidFireWeapons;
+        ReleaseFireWeapons = releaseFireWeapons;
     }
 
     public static SmartCoreAimAssistConfigState Disabled => new(
@@ -80,7 +89,10 @@ internal readonly struct SmartCoreAimAssistConfigState
         0f,
         0f,
         0f,
-        0);
+        0,
+        Array.Empty<string>(),
+        Array.Empty<string>(),
+        Array.Empty<string>());
 }
 
 internal readonly struct SmartCoreAimAssistContext
@@ -97,6 +109,7 @@ internal readonly struct SmartCoreAimAssistContext
     public readonly float SnapHipfireStrengthFactor;
     public readonly float SnapHeight;
     public readonly int SnapInnerInterpolationTypeIndex;
+    public readonly bool IsAimSnapOverrideWeapon;
     public readonly SdlGamepadInputSnapshot Input;
     public readonly OnnxDebugBox[] Boxes;
 
@@ -113,6 +126,7 @@ internal readonly struct SmartCoreAimAssistContext
         float snapHipfireStrengthFactor,
         float snapHeight,
         int snapInnerInterpolationTypeIndex,
+        bool isAimSnapOverrideWeapon,
         SdlGamepadInputSnapshot input,
         OnnxDebugBox[] boxes)
     {
@@ -128,6 +142,7 @@ internal readonly struct SmartCoreAimAssistContext
         SnapHipfireStrengthFactor = snapHipfireStrengthFactor;
         SnapHeight = snapHeight;
         SnapInnerInterpolationTypeIndex = snapInnerInterpolationTypeIndex;
+        IsAimSnapOverrideWeapon = isAimSnapOverrideWeapon;
         Input = input;
         Boxes = boxes;
     }
@@ -164,7 +179,7 @@ internal readonly struct SmartCoreDetectionState
 internal sealed class SmartCoreActivationEvaluator
 {
     private const int FireSnapModeIndex = 0;
-    private const int AimSnapModeIndex = 1;
+    private const int AimAndFireSnapModeIndex = 1;
     private const short TriggerPressedThreshold = short.MaxValue / 4;
 
     public bool IsActive(in SmartCoreAimAssistContext context)
@@ -174,10 +189,18 @@ internal sealed class SmartCoreActivationEvaluator
             return false;
         }
 
+        if (context.IsAimSnapOverrideWeapon)
+        {
+            return context.Input.RightTrigger >= TriggerPressedThreshold ||
+                   context.Input.LeftTrigger >= TriggerPressedThreshold;
+        }
+
         return context.SnapModeIndex switch
         {
             FireSnapModeIndex => context.Input.RightTrigger >= TriggerPressedThreshold,
-            AimSnapModeIndex => context.Input.LeftTrigger >= TriggerPressedThreshold,
+            AimAndFireSnapModeIndex =>
+                context.Input.LeftTrigger >= TriggerPressedThreshold ||
+                context.Input.RightTrigger >= TriggerPressedThreshold,
             _ => false
         };
     }
