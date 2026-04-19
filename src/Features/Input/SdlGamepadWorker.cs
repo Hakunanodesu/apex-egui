@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Threading;
 using SDL3;
 
@@ -74,6 +75,7 @@ internal readonly struct SdlGamepadInputSnapshot
 
 internal sealed class SdlGamepadWorker : IDisposable
 {
+    private const double TargetLoopIntervalMs = 1000.0 / 500.0;
     private readonly object _sync = new();
     private readonly Thread _thread;
     private bool _running = true;
@@ -168,11 +170,14 @@ internal sealed class SdlGamepadWorker : IDisposable
         IntPtr openedGamepad = IntPtr.Zero;
         uint openedInstanceId = 0;
         var refreshTick = 0;
+        var loopTimer = Stopwatch.StartNew();
+        var nextLoopAtMs = 0.0;
 
         try
         {
             while (_running)
             {
+                WaitForNextTick(loopTimer, ref nextLoopAtMs, TargetLoopIntervalMs);
                 SDL.PumpEvents();
                 SDL.UpdateJoysticks();
                 SDL.UpdateGamepads();
@@ -214,7 +219,6 @@ internal sealed class SdlGamepadWorker : IDisposable
                     {
                         _hasLatestInput = false;
                     }
-                    Thread.Sleep(2);
                     continue;
                 }
 
@@ -236,7 +240,6 @@ internal sealed class SdlGamepadWorker : IDisposable
                             _hasLatestInput = false;
                             _lastError = "SDL 打开手柄失败";
                         }
-                        Thread.Sleep(10);
                         continue;
                     }
                 }
@@ -271,7 +274,6 @@ internal sealed class SdlGamepadWorker : IDisposable
                     _lastError = null;
                 }
 
-                Thread.Sleep(1);
             }
         }
         catch (Exception ex)
@@ -340,6 +342,32 @@ internal sealed class SdlGamepadWorker : IDisposable
         if (_thread.IsAlive)
         {
             _thread.Join(500);
+        }
+    }
+
+    private static void WaitForNextTick(Stopwatch loopTimer, ref double nextLoopAtMs, double intervalMs)
+    {
+        if (nextLoopAtMs <= 0.0)
+        {
+            nextLoopAtMs = loopTimer.Elapsed.TotalMilliseconds;
+        }
+
+        nextLoopAtMs += intervalMs;
+        while (true)
+        {
+            var remainingMs = nextLoopAtMs - loopTimer.Elapsed.TotalMilliseconds;
+            if (remainingMs <= 0.0)
+            {
+                break;
+            }
+
+            if (remainingMs >= 1.5)
+            {
+                Thread.Sleep(1);
+                continue;
+            }
+
+            Thread.SpinWait(64);
         }
     }
 }

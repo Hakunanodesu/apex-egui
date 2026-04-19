@@ -107,7 +107,7 @@ internal readonly struct OnnxDebugBox
     }
 }
 
-internal sealed class OnnxDmlWorker : IDisposable
+internal sealed class OnnxService : IDisposable
 {
     private readonly object _sync = new();
     private readonly Thread _thread;
@@ -120,6 +120,7 @@ internal sealed class OnnxDmlWorker : IDisposable
     private int _latestFrameHeight;
     private int _latestFrameId;
     private int _lastProcessedFrameId;
+    private ViGEmMappingWorker? _detectionConsumer;
     private OnnxDebugProbe _latestProbe;
     private OnnxDebugBox[] _latestBoxes = Array.Empty<OnnxDebugBox>();
 
@@ -136,7 +137,7 @@ internal sealed class OnnxDmlWorker : IDisposable
         0,
         "无");
 
-    public OnnxDmlWorker(OnnxModelConfig model)
+    public OnnxService(OnnxModelConfig model)
     {
         _model = model;
         _thread = new Thread(WorkerMain)
@@ -193,6 +194,14 @@ internal sealed class OnnxDmlWorker : IDisposable
             var copy = new OnnxDebugBox[_latestBoxes.Length];
             Array.Copy(_latestBoxes, copy, _latestBoxes.Length);
             return copy;
+        }
+    }
+
+    public void SetDetectionConsumer(ViGEmMappingWorker? detectionConsumer)
+    {
+        lock (_sync)
+        {
+            _detectionConsumer = detectionConsumer;
         }
     }
 
@@ -253,11 +262,15 @@ internal sealed class OnnxDmlWorker : IDisposable
                     _model.AllowedClasses,
                     out var probe,
                     out var boxes);
+                ViGEmMappingWorker? detectionConsumer;
+                var detectionState = new SmartCoreDetectionState(boxes);
                 lock (_sync)
                 {
                     _latestProbe = probe;
                     _latestBoxes = boxes;
+                    detectionConsumer = _detectionConsumer;
                 }
+                detectionConsumer?.SetAimAssistDetections(detectionState);
 
                 PushInferenceSample(sw.Elapsed.TotalMilliseconds, detectionCount, outputSummary);
             }

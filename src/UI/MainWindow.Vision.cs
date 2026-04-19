@@ -1,0 +1,93 @@
+public sealed partial class MainWindow
+{
+    private readonly record struct VisionPipelineConfig(string ModelPath, int CaptureWidth, int CaptureHeight);
+
+    private DesktopCaptureService? _dxgiWorker;
+    private OnnxService? _onnxWorker;
+    private VisionPipelineConfig? _currentVisionConfig;
+
+    private void SyncSmartCoreVisionPipeline()
+    {
+        var targetConfig = BuildTargetVisionConfig();
+        if (_currentVisionConfig == targetConfig)
+        {
+            return;
+        }
+
+        ApplyVisionPipelineState(targetConfig);
+    }
+
+    private VisionPipelineConfig? BuildTargetVisionConfig()
+    {
+        if (!_smartCoreMappingState.IsEnabled)
+        {
+            return null;
+        }
+
+        if (!TryGetHomeSelectedModel(out var model))
+        {
+            return null;
+        }
+
+        var captureSize = Math.Max(1, _homeViewState.SnapOuterRange);
+        return new VisionPipelineConfig(model.OnnxPath, captureSize, captureSize);
+    }
+
+    private void ApplyVisionPipelineState(VisionPipelineConfig? targetConfig)
+    {
+        if (!targetConfig.HasValue)
+        {
+            StopVisionPipeline();
+            return;
+        }
+
+        if (!TryGetHomeSelectedModel(out var model))
+        {
+            StopVisionPipeline();
+            return;
+        }
+
+        StartVisionPipeline(model, targetConfig.Value);
+    }
+
+    private bool TryGetHomeSelectedModel(out OnnxModelConfig model)
+    {
+        if (_onnxTopSelectedModelIndex >= 0 && _onnxTopSelectedModelIndex < _onnxModels.Count)
+        {
+            model = _onnxModels[_onnxTopSelectedModelIndex];
+            return true;
+        }
+
+        model = default;
+        return false;
+    }
+
+    private void StartVisionPipeline(OnnxModelConfig model, VisionPipelineConfig config)
+    {
+        try
+        {
+            StopVisionPipeline();
+            _dxgiWorker = new DesktopCaptureService();
+            _dxgiWorker.SetCaptureRegion(config.CaptureWidth, config.CaptureHeight);
+            _onnxWorker = new OnnxService(model);
+            _onnxWorker.SetDetectionConsumer(_viGEmMappingWorker);
+            _dxgiWorker.SetFrameConsumer(_onnxWorker);
+            _currentVisionConfig = config;
+        }
+        catch
+        {
+            StopVisionPipeline();
+        }
+    }
+
+    private void StopVisionPipeline()
+    {
+        _dxgiWorker?.SetFrameConsumer(null);
+        _onnxWorker?.Dispose();
+        _onnxWorker = null;
+        _dxgiWorker?.Dispose();
+        _dxgiWorker = null;
+        _currentVisionConfig = null;
+        _viGEmMappingWorker?.SetAimAssistDetections(SmartCoreDetectionState.Empty);
+    }
+}

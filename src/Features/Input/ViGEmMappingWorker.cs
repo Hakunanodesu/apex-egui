@@ -1,22 +1,35 @@
+using System.Diagnostics;
 using System.Threading;
 using Nefarius.ViGEm.Client;
 using Nefarius.ViGEm.Client.Targets;
 using Nefarius.ViGEm.Client.Targets.Xbox360;
 
+internal readonly record struct ViGEmMappingSnapshot(
+    bool IsConnected,
+    bool RequestedEnabled,
+    bool IsMappingActive,
+    uint? SelectedInstanceId,
+    string? LastError);
+
 internal sealed class ViGEmMappingWorker : IDisposable
 {
+    private const double TargetLoopIntervalMs = 1000.0 / 500.0;
     private readonly object _sync = new();
     private readonly Thread _thread;
+    private readonly SmartCoreAimAssistService _smartCoreAimAssistService = new();
     private bool _running = true;
     private SdlGamepadWorker? _sdlGamepadWorker;
     private ViGEmClient? _client;
     private IXbox360Controller? _controller;
     private bool _isConnected;
+    private bool _requestedEnabled;
+    private bool _isMappingActive;
+    private bool _hasSelectedGamepad;
+    private uint _selectedGamepadInstanceId;
     private string _status = "未初始化";
     private string? _lastError;
-    private short _aimAssistRightX;
-    private short _aimAssistRightY;
-    private bool _aimAssistEnabled;
+    private SmartCoreAimAssistConfigState _aimAssistConfigState = SmartCoreAimAssistConfigState.Disabled;
+    private SmartCoreDetectionState _aimAssistDetectionState = SmartCoreDetectionState.Empty;
 
     public ViGEmMappingWorker()
     {
@@ -125,37 +138,94 @@ internal sealed class ViGEmMappingWorker : IDisposable
         }
     }
 
-    public void SetAimAssistOverride(short rightX, short rightY, bool enabled)
+    public ViGEmMappingSnapshot GetSnapshot()
     {
         lock (_sync)
         {
-            _aimAssistRightX = rightX;
-            _aimAssistRightY = rightY;
-            _aimAssistEnabled = enabled;
+            return new ViGEmMappingSnapshot(
+                _isConnected,
+                _requestedEnabled,
+                _isMappingActive,
+                _hasSelectedGamepad ? _selectedGamepadInstanceId : null,
+                _lastError);
+        }
+    }
+
+    public void SetRequestedEnabled(bool requestedEnabled)
+    {
+        lock (_sync)
+        {
+            _requestedEnabled = requestedEnabled;
+            if (!requestedEnabled)
+            {
+                _isMappingActive = false;
+            }
+        }
+    }
+
+    public void SetSelectedGamepad(uint? instanceId)
+    {
+        SdlGamepadWorker? sdlGamepadWorker;
+        lock (_sync)
+        {
+            _hasSelectedGamepad = instanceId.HasValue;
+            _selectedGamepadInstanceId = instanceId ?? 0;
+            if (!_hasSelectedGamepad)
+            {
+                _isMappingActive = false;
+            }
+
+            sdlGamepadWorker = _sdlGamepadWorker;
+        }
+
+        sdlGamepadWorker?.SetSelectedGamepad(instanceId);
+    }
+
+    public void SetAimAssistConfig(in SmartCoreAimAssistConfigState state)
+    {
+        lock (_sync)
+        {
+            _aimAssistConfigState = state;
+        }
+    }
+
+    public void SetAimAssistDetections(in SmartCoreDetectionState state)
+    {
+        lock (_sync)
+        {
+            _aimAssistDetectionState = state;
         }
     }
 
     private void WorkerMain()
     {
+        var loopTimer = Stopwatch.StartNew();
+        var nextLoopAtMs = 0.0;
         while (_running)
         {
+            WaitForNextTick(loopTimer, ref nextLoopAtMs, TargetLoopIntervalMs);
             SdlGamepadWorker? sdlWorker;
             bool isConnected;
-            short aimAssistRightX;
-            short aimAssistRightY;
-            bool aimAssistEnabled;
+            bool requestedEnabled;
+            bool hasSelectedGamepad;
+            SmartCoreAimAssistConfigState aimAssistConfigState;
+            SmartCoreDetectionState aimAssistDetectionState;
             lock (_sync)
             {
                 sdlWorker = _sdlGamepadWorker;
                 isConnected = _isConnected;
-                aimAssistRightX = _aimAssistRightX;
-                aimAssistRightY = _aimAssistRightY;
-                aimAssistEnabled = _aimAssistEnabled;
+                requestedEnabled = _requestedEnabled;
+                hasSelectedGamepad = _hasSelectedGamepad;
+                aimAssistConfigState = _aimAssistConfigState;
+                aimAssistDetectionState = _aimAssistDetectionState;
             }
 
-            if (sdlWorker is null || !isConnected)
+            if (sdlWorker is null || !isConnected || !requestedEnabled || !hasSelectedGamepad)
             {
-                Thread.Sleep(2);
+                lock (_sync)
+                {
+                    _isMappingActive = false;
+                }
                 continue;
             }
 
@@ -165,19 +235,35 @@ internal sealed class ViGEmMappingWorker : IDisposable
                 {
                     lock (_sync)
                     {
+                        _isMappingActive = false;
                         _lastError = sdlError;
                     }
                 }
 
-                Thread.Sleep(1);
                 continue;
             }
+
+            var aimAssistResult = _smartCoreAimAssistService.Evaluate(new SmartCoreAimAssistContext(
+                aimAssistConfigState.IsEnabled,
+                aimAssistConfigState.IsMappingActive,
+                aimAssistConfigState.SnapModeIndex,
+                aimAssistConfigState.SnapOuterRange,
+                aimAssistConfigState.SnapInnerRange,
+                aimAssistConfigState.SnapOuterStrength,
+                aimAssistConfigState.SnapInnerStrength,
+                aimAssistConfigState.SnapStartStrength,
+                aimAssistConfigState.SnapVerticalStrengthFactor,
+                aimAssistConfigState.SnapHipfireStrengthFactor,
+                aimAssistConfigState.SnapHeight,
+                aimAssistConfigState.SnapInnerInterpolationTypeIndex,
+                input,
+                aimAssistDetectionState.Boxes));
 
             if (!TrySubmitState(
                     input.LeftX,
                     InvertStickY(input.LeftY),
-                    CombineStickAxis(input.RightX, aimAssistEnabled ? aimAssistRightX : (short)0),
-                    InvertStickY(CombineStickAxis(input.RightY, aimAssistEnabled ? aimAssistRightY : (short)0)),
+                    CombineStickAxis(input.RightX, aimAssistResult.IsActive ? aimAssistResult.RightX : (short)0),
+                    InvertStickY(CombineStickAxis(input.RightY, aimAssistResult.IsActive ? aimAssistResult.RightY : (short)0)),
                     ToXboxTrigger(input.LeftTrigger),
                     ToXboxTrigger(input.RightTrigger),
                     input.A,
@@ -206,11 +292,11 @@ internal sealed class ViGEmMappingWorker : IDisposable
             {
                 lock (_sync)
                 {
+                    _isMappingActive = true;
                     _lastError = null;
                 }
             }
 
-            Thread.Sleep(1);
         }
     }
 
@@ -340,6 +426,32 @@ internal sealed class ViGEmMappingWorker : IDisposable
         finally
         {
             _client = null;
+        }
+    }
+
+    private static void WaitForNextTick(Stopwatch loopTimer, ref double nextLoopAtMs, double intervalMs)
+    {
+        if (nextLoopAtMs <= 0.0)
+        {
+            nextLoopAtMs = loopTimer.Elapsed.TotalMilliseconds;
+        }
+
+        nextLoopAtMs += intervalMs;
+        while (true)
+        {
+            var remainingMs = nextLoopAtMs - loopTimer.Elapsed.TotalMilliseconds;
+            if (remainingMs <= 0.0)
+            {
+                break;
+            }
+
+            if (remainingMs >= 1.5)
+            {
+                Thread.Sleep(1);
+                continue;
+            }
+
+            Thread.SpinWait(64);
         }
     }
 }

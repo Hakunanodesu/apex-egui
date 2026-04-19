@@ -22,7 +22,7 @@ internal readonly struct CaptureTelemetry
     }
 }
 
-internal sealed class DesktopCaptureWorker : IDisposable
+internal sealed class DesktopCaptureService : IDisposable
 {
     private const double TargetCaptureIntervalMs = 1000.0 / 60.0;
     private readonly object _sync = new();
@@ -33,6 +33,7 @@ internal sealed class DesktopCaptureWorker : IDisposable
     private int _latestHeight;
     private int _latestFrameId;
     private string? _lastError;
+    private OnnxService? _frameConsumer;
 
     private long _pollCount;
     private long _successCount;
@@ -42,7 +43,7 @@ internal sealed class DesktopCaptureWorker : IDisposable
     private int _requestedCaptureWidth = 320;
     private int _requestedCaptureHeight = 320;
 
-    public DesktopCaptureWorker()
+    public DesktopCaptureService()
     {
         _thread = new Thread(CaptureThreadMain)
         {
@@ -104,6 +105,14 @@ internal sealed class DesktopCaptureWorker : IDisposable
         }
     }
 
+    public void SetFrameConsumer(OnnxService? frameConsumer)
+    {
+        lock (_sync)
+        {
+            _frameConsumer = frameConsumer;
+        }
+    }
+
     private void CaptureThreadMain()
     {
         try
@@ -136,6 +145,8 @@ internal sealed class DesktopCaptureWorker : IDisposable
                 var ok = duplicator.TryCaptureFrame(1, out var frameData, out var width, out var height, out var error);
                 timer.Stop();
                 var shouldBackoff = false;
+                OnnxService? frameConsumer = null;
+                var frameId = 0;
 
                 lock (_sync)
                 {
@@ -157,6 +168,8 @@ internal sealed class DesktopCaptureWorker : IDisposable
                         _latestWidth = width;
                         _latestHeight = height;
                         _latestFrameId++;
+                        frameId = _latestFrameId;
+                        frameConsumer = _frameConsumer;
                     }
                     else if (!string.IsNullOrWhiteSpace(error))
                     {
@@ -167,6 +180,11 @@ internal sealed class DesktopCaptureWorker : IDisposable
                     {
                         shouldBackoff = true;
                     }
+                }
+
+                if (ok && frameConsumer is not null)
+                {
+                    frameConsumer.SubmitFrame(frameData, width, height, frameId);
                 }
 
                 if (shouldBackoff)

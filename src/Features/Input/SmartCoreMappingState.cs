@@ -12,9 +12,5 @@ internal sealed class SmartCoreMappingState
 
     public bool IsMappingActive { get; set; }
 
-    public int EffectiveSelectedIndex { get; set; } = -1;
-
-    public uint? EffectiveSelectedInstanceId { get; set; }
-
     public string LastError { get; set; } = string.Empty;
 }

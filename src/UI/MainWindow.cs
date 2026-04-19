@@ -1,6 +1,5 @@
 using System.Numerics;
 using System.Diagnostics;
-using System.Threading;
 using ImGuiNET;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Windowing.Common;
@@ -8,12 +7,10 @@ using OpenTK.Windowing.Desktop;
 using OpenTK.Windowing.GraphicsLibraryFramework;
 using Keys = OpenTK.Windowing.GraphicsLibraryFramework.Keys;
 using SDL3;
-using Vortice.Direct3D;
-using Vortice.Direct3D11;
-using Vortice.DXGI;
 
 public sealed partial class MainWindow : GameWindow
 {
+    private const string ViGemBusInstallPath = @"C:\Program Files\Nefarius Software Solutions";
     private const string ViGemBusInstallerUrl = "https://github.com/nefarius/ViGEmBus/releases/download/v1.22.0/ViGEmBus_1.22.0_x64_x86_arm64.exe";
     private const string WindowStateFileName = "window_state.ini";
     private const int DefaultSnapOuterRange = 1;
@@ -30,7 +27,7 @@ public sealed partial class MainWindow : GameWindow
 
     private readonly List<OnnxModelConfig> _onnxModels = new();
     private int _onnxTopSelectedModelIndex = -1;
-    private static readonly string[] HomeSnapModeOptions = { "Fire Snap", "Aim Snap" };
+    private static readonly string[] HomeSnapModeOptions = { "开火吸附", "瞄准吸附" };
     private static readonly string[] SnapInnerInterpolationTypeOptions = { "Linear", "Quadratic" };
     private static readonly string[] SpecialWeaponNames =
     {
@@ -56,15 +53,12 @@ public sealed partial class MainWindow : GameWindow
     private readonly List<string> _configFiles = new();
     private int _selectedConfigFileIndex;
     private int _homeSelectedGamepadIndex;
-    private int _debugSelectedGamepadIndex;
     private OpenTK.Mathematics.Vector2i _lastNormalClientSize;
     private SdlGamepadWorker? _sdlGamepadWorker;
     private ViGEmMappingWorker? _viGEmMappingWorker;
     private readonly ConfigRepository _configRepository = new(ConfigsDirectoryPath);
-    private readonly ConfigSession _configSession;
-    private readonly InputDevicesFacade _inputDevicesFacade = new();
-    private readonly SmartCoreFacade _smartCoreFacade = new();
-    private readonly SmartCoreAimAssistService _smartCoreAimAssistService = new();
+    private readonly ConfigStore _configStore;
+    private readonly GamepadService _gamepadService = new();
     private readonly SmartCoreMappingState _smartCoreMappingState = new();
     private static readonly WindowStateService WindowStateService = new();
     private (uint InstanceId, string Name)[] _cachedConnectedGamepads = Array.Empty<(uint InstanceId, string Name)>();
@@ -79,7 +73,7 @@ public sealed partial class MainWindow : GameWindow
     public MainWindow(GameWindowSettings gameWindowSettings, NativeWindowSettings nativeWindowSettings)
         : base(gameWindowSettings, nativeWindowSettings)
     {
-        _configSession = new ConfigSession(_configRepository);
+        _configStore = new ConfigStore(_configRepository);
     }
 
     protected override void OnLoad()
@@ -95,10 +89,13 @@ public sealed partial class MainWindow : GameWindow
         RefreshOnnxModels();
         RefreshConfigFiles();
         RefreshHomeInputDevices();
-        RefreshDebugInputDevices();
+        ApplySelectedGamepadSelection();
+        PushAimAssistConfig();
+        RefreshSmartCoreState();
+        SyncSmartCoreVisionPipeline();
         _lastNormalClientSize = ClientSize;
 
-        InitDebugVirtualGamepad();
+        InitializeVirtualGamepadConnection();
     }
 
     protected override void OnRenderFrame(FrameEventArgs args)
@@ -110,27 +107,6 @@ public sealed partial class MainWindow : GameWindow
         }
 
         RefreshDpiScale();
-        if (_dxgiPreviewEnabled)
-        {
-            UpdateDxgiPreview((float)args.Time);
-        }
-        var dxgiTelemetry = _dxgiWorker?.GetTelemetrySnapshot() ?? default;
-        _dxgiSampleBuffer.Clear();
-        _dxgiWorker?.DrainCaptureSamples(_dxgiSampleBuffer);
-        _dxgiPerfStats.PushSample((float)args.Time, dxgiTelemetry, _dxgiSampleBuffer);
-        if (_dxgiPerfStats.TryBuildSnapshot(out var dxgiSnapshot))
-        {
-            _dxgiPerfSnapshot = dxgiSnapshot;
-        }
-
-        PumpOnnxFromDxgi();
-        if (_onnxWorker is not null)
-        {
-            _onnxSnapshot = _onnxWorker.GetSnapshot();
-            _onnxStatus = _onnxSnapshot.Status;
-        }
-
-        MirrorSelectedGamepadToVirtualGamepad();
 
         _controller.Update(this, (float)args.Time, _dpiScale);
         DrawUi();
@@ -157,7 +133,7 @@ public sealed partial class MainWindow : GameWindow
 
         if (ImGui.BeginTabBar("RootTabs"))
         {
-            if (ImGui.BeginTabItem("主页"))
+            if (ImGui.BeginTabItem("涓婚〉"))
             {
                 DrawHomeTab();
                 ImGui.EndTabItem();
@@ -250,7 +226,7 @@ public sealed partial class MainWindow : GameWindow
         {
             ImGui.BeginDisabled();
             ImGui.SetNextItemWidth(comboWidth);
-            ImGui.Combo(id, ref _onnxTopSelectedModelIndex, "閺冪姴褰查悽銊δ侀崹濯?");
+            ImGui.Combo(id, ref _onnxTopSelectedModelIndex, "闂佸搫鍟版慨纾嬨亹閺屻儲鍋ㄩ柕濞㈢繝绶氬畷瑙勫垔?");
             ImGui.EndDisabled();
             return;
         }
@@ -299,6 +275,7 @@ public sealed partial class MainWindow : GameWindow
         if (_onnxTopSelectedModelIndex != indexBeforeUi)
         {
             TryWriteSelectedModelNameToCurrentConfig(_onnxModels[_onnxTopSelectedModelIndex].DisplayName);
+            SyncSmartCoreVisionPipeline();
         }
     }
 
@@ -361,13 +338,12 @@ public sealed partial class MainWindow : GameWindow
         {
             _onnxTopSelectedModelIndex = -1;
         }
-        _onnxDebugSelectedModelIndex = Math.Clamp(_onnxDebugSelectedModelIndex, 0, Math.Max(0, _onnxModels.Count - 1));
         TryApplyModelSelectionFromCurrentConfig();
     }
 
     private void RefreshConfigFiles(string? forceSelectBaseName = null)
     {
-        var refreshResult = _configSession.RefreshConfigFiles(_configFiles, _selectedConfigFileIndex, forceSelectBaseName);
+        var refreshResult = _configStore.RefreshConfigFiles(_configFiles, _selectedConfigFileIndex, forceSelectBaseName);
         _configFiles.Clear();
         _configFiles.AddRange(refreshResult.ConfigFiles);
         if (_configFiles.Count == 0)
@@ -399,12 +375,12 @@ public sealed partial class MainWindow : GameWindow
 
     private void TryWriteSelectedModelNameToCurrentConfig(string modelName)
     {
-        _configSession.TryWriteString(_configFiles, _selectedConfigFileIndex, "model", modelName);
+        _configStore.TryWriteString(_configFiles, _selectedConfigFileIndex, "model", modelName);
     }
 
     private void TryApplyModelSelectionFromCurrentConfig()
     {
-        var selectionResult = _configSession.ApplyCurrentConfigSelection(
+        var selectionResult = _configStore.ApplyCurrentConfigSelection(
             _configFiles,
             _selectedConfigFileIndex,
             _onnxModels,
@@ -423,6 +399,8 @@ public sealed partial class MainWindow : GameWindow
         {
             _homeViewState.SnapModeIndex = -1;
             _onnxTopSelectedModelIndex = -1;
+            PushAimAssistConfig();
+            SyncSmartCoreVisionPipeline();
             return;
         }
 
@@ -430,11 +408,14 @@ public sealed partial class MainWindow : GameWindow
         ApplySpecialWeaponLogicFromCurrentConfig();
         _onnxTopSelectedModelIndex = selectionResult.ModelIndex;
         _homeViewState.ApplySnapConfig(selectionResult.SnapConfig);
+        PushAimAssistConfig();
+        SyncSmartCoreVisionPipeline();
     }
 
     private void ResetConfigUiStateToDefaults()
     {
         _smartCoreMappingState.RequestedEnabled = false;
+        _viGEmMappingWorker?.SetRequestedEnabled(false);
         _onnxTopSelectedModelIndex = -1;
         _homeViewState.ResetSnapSettings(
             0,
@@ -450,20 +431,23 @@ public sealed partial class MainWindow : GameWindow
         Array.Clear(_specialWeaponAimSnapEnabled);
         Array.Clear(_specialWeaponRapidFireEnabled);
         Array.Clear(_specialWeaponReleaseFireEnabled);
+        PushAimAssistConfig();
+        RefreshSmartCoreState();
+        SyncSmartCoreVisionPipeline();
     }
 
     private void TryWriteStringToCurrentConfig(string key, string value) =>
-        _configSession.TryWriteString(_configFiles, _selectedConfigFileIndex, key, value);
+        _configStore.TryWriteString(_configFiles, _selectedConfigFileIndex, key, value);
 
     private void TryWriteIntToCurrentConfig(string key, int value) =>
-        _configSession.TryWriteInt(_configFiles, _selectedConfigFileIndex, key, value);
+        _configStore.TryWriteInt(_configFiles, _selectedConfigFileIndex, key, value);
 
     private void TryWriteFloatToCurrentConfig(string key, float value) =>
-        _configSession.TryWriteFloat(_configFiles, _selectedConfigFileIndex, key, value);
+        _configStore.TryWriteFloat(_configFiles, _selectedConfigFileIndex, key, value);
 
     private void TryWriteSpecialWeaponLogicValueToCurrentConfig(int weaponIndex, bool aimSnapEnabled, bool rapidFireEnabled, bool releaseFireEnabled)
     {
-        _configSession.TryWriteSpecialWeaponLogic(
+        _configStore.TryWriteSpecialWeaponLogic(
             _configFiles,
             _selectedConfigFileIndex,
             SpecialWeaponLogicConfigKey,
@@ -482,7 +466,7 @@ public sealed partial class MainWindow : GameWindow
 
     private void ApplySpecialWeaponLogicFromCurrentConfig()
     {
-        _configSession.LoadSpecialWeaponLogic(
+        _configStore.LoadSpecialWeaponLogic(
             _configFiles,
             _selectedConfigFileIndex,
             SpecialWeaponLogicConfigKey,
@@ -496,24 +480,24 @@ public sealed partial class MainWindow : GameWindow
     }
 
     private string? TryReadStringFromCurrentConfig(string key) =>
-        _configSession.TryReadString(_configFiles, _selectedConfigFileIndex, key);
+        _configStore.TryReadString(_configFiles, _selectedConfigFileIndex, key);
 
     private void ClearSelectedModelNameFromCurrentConfig() =>
-        _configSession.TryRemoveKey(_configFiles, _selectedConfigFileIndex, "model");
+        _configStore.TryRemoveKey(_configFiles, _selectedConfigFileIndex, "model");
 
     private bool TryResolveCurrentConfigPath(out string configPath) =>
-        _configSession.TryResolvePath(_configFiles, _selectedConfigFileIndex, out configPath);
+        _configStore.TryResolvePath(_configFiles, _selectedConfigFileIndex, out configPath);
 
 /*
     private void DrawConfigFileModals()
     {
         if (_configAddModalOpenRequested)
         {
-            ImGui.OpenPopup("鐠囩柉绶崗銉︽煀闁板秶鐤嗛崥宥囆?);
+            ImGui.OpenPopup("闁荤姴娲ㄩ弻澶屾椤撱垹绀傞柕澶涢檮閻撯偓闂備焦婢樼粔鍫曟偪閸℃稑瑙︾€广儱娉?);
             _configAddModalOpenRequested = false;
         }
 
-        if (ImGui.BeginPopupModal("鐠囩柉绶崗銉︽煀闁板秶鐤嗛崥宥囆?, ref _configAddModalOpen, ImGuiWindowFlags.AlwaysAutoResize))
+        if (ImGui.BeginPopupModal("闁荤姴娲ㄩ弻澶屾椤撱垹绀傞柕澶涢檮閻撯偓闂備焦婢樼粔鍫曟偪閸℃稑瑙︾€广儱娉?, ref _configAddModalOpen, ImGuiWindowFlags.AlwaysAutoResize))
         {
             ImGui.InputText("##AddConfigNameInput", ref _addConfigNameBuffer, 256);
             if (!string.IsNullOrEmpty(_configAddModalError))
@@ -522,7 +506,7 @@ public sealed partial class MainWindow : GameWindow
                 ImGui.TextUnformatted(_configAddModalError);
             }
 
-            if (ImGui.Button("閸掓稑缂?))
+            if (ImGui.Button("闂佸憡甯楃粙鎴犵磽?))
             {
                 if (TryCreateEmptyConfigFile(_addConfigNameBuffer, out var err))
                 {
@@ -537,7 +521,7 @@ public sealed partial class MainWindow : GameWindow
             }
 
             ImGui.SameLine();
-            if (ImGui.Button("閸欐牗绉?))
+            if (ImGui.Button("闂佸憡鐟﹂悧妤冪矓?))
             {
                 _configAddModalError = string.Empty;
                 _configAddModalOpen = false;
@@ -549,16 +533,16 @@ public sealed partial class MainWindow : GameWindow
 
         if (_configDeleteModalOpenRequested)
         {
-            ImGui.OpenPopup("閸掔娀娅庨柊宥囩枂绾喛顓?);
+            ImGui.OpenPopup("闂佸憡甯炴繛鈧繛鍛叄閺屽﹤顓奸崶鈺傜€紒缁㈠弾閸犳盯顢?);
             _configDeleteModalOpenRequested = false;
         }
 
-        if (ImGui.BeginPopupModal("閸掔娀娅庨柊宥囩枂绾喛顓?, ref _configDeleteModalOpen, ImGuiWindowFlags.AlwaysAutoResize))
+        if (ImGui.BeginPopupModal("闂佸憡甯炴繛鈧繛鍛叄閺屽﹤顓奸崶鈺傜€紒缁㈠弾閸犳盯顢?, ref _configDeleteModalOpen, ImGuiWindowFlags.AlwaysAutoResize))
         {
             var name = _pendingDeleteConfigBaseName ?? string.Empty;
             ImGui.AlignTextToFramePadding();
-            ImGui.TextUnformatted($"绾喖鐣鹃崚鐘绘珟闁板秶鐤嗛弬鍥︽ {name} 閸氭绱靛銈嗘惙娴ｆ粈绗夐崣顖涙寵闁库偓閵?);
-            if (ImGui.Button("绾喖鐣?))
+            ImGui.TextUnformatted($"缂佺虎鍙庨崰鏍偩妤ｅ啫绀嗛柣妯肩帛閻濈喖姊洪弶璺ㄐら柣銈呮瀵剟宕堕敂绛嬪仺 {name} 闂佸憡纰嶉〃鎰闂堟侗娼伴柕鍫濇閹瑥霉閿濆棛鐭嗙紒妤€顦靛畷锝夘敍濞戞瑥顕梻浣哥氨閸嬫捇鏌?);
+            if (ImGui.Button("缂佺虎鍙庨崰鏍偩?))
             {
                 TryDeleteSelectedConfigFile(name);
                 _pendingDeleteConfigBaseName = null;
@@ -567,7 +551,7 @@ public sealed partial class MainWindow : GameWindow
             }
 
             ImGui.SameLine();
-            if (ImGui.Button("閸欐牗绉?))
+            if (ImGui.Button("闂佸憡鐟﹂悧妤冪矓?))
             {
                 _pendingDeleteConfigBaseName = null;
                 _configDeleteModalOpen = false;
@@ -650,24 +634,19 @@ public sealed partial class MainWindow : GameWindow
         _viGEmMappingWorker = null;
         _sdlGamepadWorker?.Dispose();
         _sdlGamepadWorker = null;
-        StopOnnxInference("Disposed");
-        StopDxgiCapture("Disposed");
-        if (_dxgiPreviewTexture != 0)
-        {
-            GL.DeleteTexture(_dxgiPreviewTexture);
-            _dxgiPreviewTexture = 0;
-        }
+        StopVisionPipeline();
 
         _controller?.Dispose();
         SaveWindowState();
         SDL.QuitSubSystem(SDL.InitFlags.Gamepad);
         base.OnUnload();
     }
-    private void InitDebugVirtualGamepad()
+    private void InitializeVirtualGamepadConnection()
     {
         try
         {
             _viGEmMappingWorker?.ConnectVirtualGamepad();
+            RefreshSmartCoreState();
         }
         catch (Exception ex)
         {
@@ -778,12 +757,51 @@ public sealed partial class MainWindow : GameWindow
             // Ignore persistence failures to avoid blocking shutdown.
         }
     }
-}
 
-internal sealed class WindowStateSnapshot
-{
-    public int Width { get; init; }
-    public int Height { get; init; }
-    public bool IsMaximized { get; init; }
+    private void ApplySelectedGamepadSelection()
+    {
+        uint? selectedInstanceId = null;
+        if (_homeSelectedGamepadIndex >= 0 && _homeSelectedGamepadIndex < _cachedConnectedGamepads.Length)
+        {
+            selectedInstanceId = _cachedConnectedGamepads[_homeSelectedGamepadIndex].InstanceId;
+        }
+
+        _viGEmMappingWorker?.SetSelectedGamepad(selectedInstanceId);
+        RefreshSmartCoreState();
+    }
+
+    private void PushAimAssistConfig()
+    {
+        if (_viGEmMappingWorker is null)
+        {
+            return;
+        }
+
+        var config = new SmartCoreAimAssistConfigState(
+            _smartCoreMappingState.IsEnabled,
+            _smartCoreMappingState.IsMappingActive,
+            _homeViewState.SnapModeIndex,
+            _homeViewState.SnapOuterRange,
+            _homeViewState.SnapInnerRange,
+            _homeViewState.SnapOuterStrength,
+            _homeViewState.SnapInnerStrength,
+            _homeViewState.SnapStartStrength,
+            _homeViewState.SnapVerticalStrengthFactor,
+            _homeViewState.SnapHipfireStrengthFactor,
+            _homeViewState.SnapHeight,
+            _homeViewState.SnapInnerInterpolationTypeIndex);
+        _viGEmMappingWorker.SetAimAssistConfig(config);
+    }
+
+    private void RefreshSmartCoreState()
+    {
+        _smartCoreMappingState.IsViGemBusReady = Directory.Exists(ViGemBusInstallPath);
+        _smartCoreMappingState.HasInputDevice = _cachedConnectedGamepads.Length > 0;
+        _smartCoreMappingState.IsEnabled = _smartCoreMappingState.RequestedEnabled && _smartCoreMappingState.IsDependenciesReady;
+
+        var snapshot = _viGEmMappingWorker?.GetSnapshot();
+        _smartCoreMappingState.IsMappingActive = snapshot?.IsMappingActive ?? false;
+        _smartCoreMappingState.LastError = snapshot?.LastError ?? string.Empty;
+    }
 }
 

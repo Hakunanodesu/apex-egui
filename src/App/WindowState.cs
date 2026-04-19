@@ -68,3 +68,10 @@ internal sealed class WindowStateService
         File.WriteAllText(filePath, content);
     }
 }
+
+internal sealed class WindowStateSnapshot
+{
+    public int Width { get; init; }
+    public int Height { get; init; }
+    public bool IsMaximized { get; init; }
+}

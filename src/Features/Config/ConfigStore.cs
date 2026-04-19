@@ -1,10 +1,34 @@
 using System.Text.Json.Nodes;
 
-internal sealed class ConfigSession
+internal sealed class SnapConfigState
+{
+    public int OuterRange { get; init; }
+    public int InnerRange { get; init; }
+    public float OuterStrength { get; init; }
+    public float InnerStrength { get; init; }
+    public float StartStrength { get; init; }
+    public float VerticalStrengthFactor { get; init; }
+    public float HipfireStrengthFactor { get; init; }
+    public float Height { get; init; }
+    public int InnerInterpolationTypeIndex { get; init; }
+}
+
+internal readonly record struct ConfigRefreshResult(IReadOnlyList<string> ConfigFiles, int SelectedIndex);
+
+internal readonly record struct ConfigSelectionResult(
+    bool HasConfig,
+    int SnapModeIndex,
+    int ModelIndex,
+    SnapConfigState SnapConfig)
+{
+    public static ConfigSelectionResult Empty => new(false, -1, -1, new SnapConfigState());
+}
+
+internal sealed class ConfigStore
 {
     private readonly ConfigRepository _repository;
 
-    public ConfigSession(ConfigRepository repository)
+    public ConfigStore(ConfigRepository repository)
     {
         _repository = repository;
     }
