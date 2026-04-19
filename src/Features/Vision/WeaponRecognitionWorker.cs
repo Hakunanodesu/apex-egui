@@ -3,11 +3,10 @@ using System.Threading;
 
 internal readonly record struct WeaponRecognitionResultState(
     string WeaponName,
-    float Similarity,
-    float MatchLatencyMs)
+    float Similarity)
 {
     public static WeaponRecognitionResultState Empty =>
-        new(WeaponTemplateCatalog.EmptyHandName, 0f, 0f);
+        new(WeaponTemplateCatalog.EmptyHandName, 0f);
 }
 
 internal sealed class WeaponRecognitionWorker : IDisposable
@@ -141,7 +140,7 @@ internal sealed class WeaponRecognitionWorker : IDisposable
             var weaponName = bestSimilarity < WeaponTemplateCatalog.EmptyHandSsimThreshold || string.IsNullOrWhiteSpace(bestName)
                 ? WeaponTemplateCatalog.EmptyHandName
                 : bestName;
-            Publish(new WeaponRecognitionResultState(weaponName, bestSimilarity, (float)sw.Elapsed.TotalMilliseconds));
+            Publish(new WeaponRecognitionResultState(weaponName, bestSimilarity));
         }
     }
 

@@ -709,10 +709,11 @@ public sealed partial class MainWindow
             var previewWindowThread = new Thread(() =>
             {
                 const int WeaponPreviewGapPx = 0;
-                const int WeaponPreviewPaddingPx = 8;
+                const int WeaponPreviewPaddingPx = 0;
                 var initialSize = Math.Max(1, _homeViewState.SnapOuterRange);
                 var initialWeaponImageHeight = Math.Max(1, WeaponTemplateCatalog.TemplateHeight);
-                var initialWeaponSectionHeight = initialWeaponImageHeight + WeaponPreviewPaddingPx * 2;
+                var initialMetricsHeight = Math.Max(1, (System.Drawing.SystemFonts.MessageBoxFont?.Height ?? 12) * 5);
+                var initialWeaponSectionHeight = initialWeaponImageHeight + WeaponPreviewPaddingPx * 2 + initialMetricsHeight;
                 using var form = new SmartCorePreviewForm
                 {
                     Text = string.Empty,
@@ -750,6 +751,15 @@ public sealed partial class MainWindow
                 var sobelWidth = 0;
                 var sobelHeight = 0;
                 System.Drawing.Bitmap? cachedSobelBitmap = null;
+                var captureLatencySamples = new List<double>(256);
+                var statsWindowStartUtc = DateTime.UtcNow;
+                var captureSampleCount = 0;
+                var captureLatencySumMs = 0.0;
+                var displayCaptureFps = 0.0;
+                var displayCaptureAvgMs = 0.0;
+                var displayOnnxAvgMs = 0.0;
+                var displayWeaponSimilarity = 0.0f;
+                var displayWeaponName = WeaponTemplateCatalog.EmptyHandName;
 
                 var refreshTimer = new System.Windows.Forms.Timer { Interval = SmartCorePreviewIntervalMs };
                 refreshTimer.Tick += (_, _) =>
@@ -761,7 +771,8 @@ public sealed partial class MainWindow
 
                     var targetSize = Math.Max(1, _homeViewState.SnapOuterRange);
                     var weaponImageHeight = Math.Max(1, WeaponTemplateCatalog.TemplateHeight);
-                    var weaponSectionHeight = weaponImageHeight + WeaponPreviewPaddingPx * 2;
+                    var metricsHeight = Math.Max(1, form.Font.Height * 5);
+                    var weaponSectionHeight = weaponImageHeight + WeaponPreviewPaddingPx * 2 + metricsHeight;
                     var expectedClientSize = new System.Drawing.Size(targetSize, targetSize + WeaponPreviewGapPx + weaponSectionHeight);
                     if (form.ClientSize != expectedClientSize)
                     {
@@ -775,6 +786,16 @@ public sealed partial class MainWindow
                     if (worker is not null)
                     {
                         hasNewFrame = worker.TryCopyLatestFrame(ref frameBuffer, ref lastFrameId, out frameWidth, out frameHeight, out frameError);
+                        captureLatencySamples.Clear();
+                        worker.DrainCaptureSamples(captureLatencySamples);
+                        if (captureLatencySamples.Count > 0)
+                        {
+                            captureSampleCount += captureLatencySamples.Count;
+                            for (var i = 0; i < captureLatencySamples.Count; i++)
+                            {
+                                captureLatencySumMs += captureLatencySamples[i];
+                            }
+                        }
                     }
                     else
                     {
@@ -794,7 +815,24 @@ public sealed partial class MainWindow
                         sobelHeight = 0;
                     }
 
-                    if (hasNewFrame || hasNewSobel || worker is null)
+                    var statsUpdated = false;
+                    var statsElapsed = DateTime.UtcNow - statsWindowStartUtc;
+                    if (statsElapsed.TotalSeconds >= 1.0)
+                    {
+                        var elapsedSeconds = Math.Max(0.001, statsElapsed.TotalSeconds);
+                        displayCaptureFps = captureSampleCount / elapsedSeconds;
+                        displayCaptureAvgMs = captureSampleCount > 0 ? captureLatencySumMs / captureSampleCount : 0.0;
+                        displayOnnxAvgMs = _onnxWorker?.GetSnapshot().AvgInferenceMs ?? 0.0;
+                        var weaponResult = _weaponRecWorker?.GetLatestResult() ?? WeaponRecognitionResultState.Empty;
+                        displayWeaponSimilarity = weaponResult.Similarity;
+                        displayWeaponName = weaponResult.WeaponName;
+                        captureSampleCount = 0;
+                        captureLatencySumMs = 0.0;
+                        statsWindowStartUtc = DateTime.UtcNow;
+                        statsUpdated = true;
+                    }
+
+                    if (hasNewFrame || hasNewSobel || worker is null || statsUpdated)
                     {
                         form.Invalidate();
                     }
@@ -884,8 +922,6 @@ public sealed partial class MainWindow
                         mainRect.Bottom + WeaponPreviewGapPx,
                         form.ClientSize.Width,
                         Math.Max(1, form.ClientSize.Height - (mainRect.Bottom + WeaponPreviewGapPx)));
-                    using var sobelSectionBrush = new System.Drawing.SolidBrush(System.Drawing.Color.FromArgb(26, 30, 36));
-                    e.Graphics.FillRectangle(sobelSectionBrush, sobelSectionRect);
 
                     if (sobelWidth > 0 && sobelHeight > 0 && sobelBuffer.Length == sobelWidth * sobelHeight)
                     {
@@ -937,6 +973,16 @@ public sealed partial class MainWindow
                             statusBrush,
                             new System.Drawing.PointF(sobelSectionRect.X + 12f, sobelSectionRect.Y + 10f));
                     }
+
+                    using var metricsBrush = new System.Drawing.SolidBrush(System.Drawing.Color.Gainsboro);
+                    var metricsX = sobelSectionRect.X + 2f;
+                    var metricsY = sobelSectionRect.Y + Math.Max(1, WeaponTemplateCatalog.TemplateHeight);
+                    var lineHeight = form.Font.GetHeight(e.Graphics);
+                    e.Graphics.DrawString($"Capture FPS: {displayCaptureFps:F1}", form.Font, metricsBrush, new System.Drawing.PointF(metricsX, metricsY));
+                    e.Graphics.DrawString($"Capture Avg: {displayCaptureAvgMs:F2} ms", form.Font, metricsBrush, new System.Drawing.PointF(metricsX, metricsY + lineHeight));
+                    e.Graphics.DrawString($"ONNX Avg: {displayOnnxAvgMs:F2} ms", form.Font, metricsBrush, new System.Drawing.PointF(metricsX, metricsY + lineHeight * 2f));
+                    e.Graphics.DrawString($"Similarity: {displayWeaponSimilarity:F3}", form.Font, metricsBrush, new System.Drawing.PointF(metricsX, metricsY + lineHeight * 3f));
+                    e.Graphics.DrawString($"Weapon: {displayWeaponName}", form.Font, metricsBrush, new System.Drawing.PointF(metricsX, metricsY + lineHeight * 4f));
                 };
 
                 form.FormClosing += (_, e) =>

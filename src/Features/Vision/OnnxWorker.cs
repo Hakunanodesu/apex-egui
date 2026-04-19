@@ -6,82 +6,14 @@ using Microsoft.ML.OnnxRuntime.Tensors;
 internal readonly struct OnnxInferenceSnapshot
 {
     public readonly string Status;
-    public readonly double InferenceFps;
     public readonly double AvgInferenceMs;
-    public readonly double P95InferenceMs;
-    public readonly double P99InferenceMs;
-    public readonly int DetectionCount;
-    public readonly string OutputSummary;
-    public readonly OnnxDebugProbe Probe;
 
     public OnnxInferenceSnapshot(
         string status,
-        double inferenceFps,
-        double avgInferenceMs,
-        double p95InferenceMs,
-        double p99InferenceMs,
-        int detectionCount,
-        string outputSummary)
-        : this(status, inferenceFps, avgInferenceMs, p95InferenceMs, p99InferenceMs, detectionCount, outputSummary, default)
-    {
-    }
-
-    public OnnxInferenceSnapshot(
-        string status,
-        double inferenceFps,
-        double avgInferenceMs,
-        double p95InferenceMs,
-        double p99InferenceMs,
-        int detectionCount,
-        string outputSummary,
-        OnnxDebugProbe probe)
+        double avgInferenceMs)
     {
         Status = status;
-        InferenceFps = inferenceFps;
         AvgInferenceMs = avgInferenceMs;
-        P95InferenceMs = p95InferenceMs;
-        P99InferenceMs = p99InferenceMs;
-        DetectionCount = detectionCount;
-        OutputSummary = outputSummary;
-        Probe = probe;
-    }
-}
-
-internal readonly struct OnnxDebugProbe
-{
-    public readonly bool HasValue;
-    public readonly int InputWidth;
-    public readonly int InputHeight;
-    public readonly float Raw0;
-    public readonly float Raw1;
-    public readonly float Raw2;
-    public readonly float Raw3;
-    public readonly float Objectness;
-    public readonly float ClassScore;
-    public readonly float Score;
-
-    public OnnxDebugProbe(
-        bool hasValue,
-        int inputWidth,
-        int inputHeight,
-        float raw0,
-        float raw1,
-        float raw2,
-        float raw3,
-        float objectness,
-        float classScore,
-        float score)
-    {
-        HasValue = hasValue;
-        InputWidth = inputWidth;
-        InputHeight = inputHeight;
-        Raw0 = raw0;
-        Raw1 = raw1;
-        Raw2 = raw2;
-        Raw3 = raw3;
-        Objectness = objectness;
-        ClassScore = classScore;
-        Score = score;
     }
 }
 
@@ -123,22 +55,15 @@ internal sealed class OnnxWorker : IDisposable
     private int _pendingFrameId;
     private int _lastProcessedFrameId;
     private ViGEmMappingWorker? _detectionConsumer;
-    private OnnxDebugProbe _latestProbe;
     private OnnxDebugBox[] _latestBoxes = Array.Empty<OnnxDebugBox>();
     private float[] _preprocessBuffer = Array.Empty<float>();
 
     private readonly List<double> _windowSamples = new(256);
     private DateTime _windowStartUtc = DateTime.UtcNow;
-    private long _windowInferenceCount;
 
     private OnnxInferenceSnapshot _snapshot = new(
         "Not started",
-        0.0,
-        0.0,
-        0.0,
-        0.0,
-        0,
-        "None");
+        0.0);
 
     public OnnxWorker(OnnxModelConfig model)
     {
@@ -181,14 +106,6 @@ internal sealed class OnnxWorker : IDisposable
         lock (_sync)
         {
             return _snapshot;
-        }
-    }
-
-    public OnnxDebugProbe GetDebugProbe()
-    {
-        lock (_sync)
-        {
-            return _latestProbe;
         }
     }
 
@@ -259,27 +176,24 @@ internal sealed class OnnxWorker : IDisposable
                 using var outputs = session.Run(new[] { NamedOnnxValue.CreateFromTensor(inputName, inputTensor) });
                 sw.Stop();
 
-                var outputSummary = BuildOutputSummary(outputs);
-                var detectionCount = CountDetections(
+                _ = CountDetections(
                     outputs,
                     _model.InputWidth,
                     _model.InputHeight,
                     _model.ConfThreshold,
                     _model.IouThreshold,
                     _model.AllowedClasses,
-                    out var probe,
                     out var boxes);
                 ViGEmMappingWorker? detectionConsumer;
                 var detectionState = new SmartCoreDetectionState(boxes);
                 lock (_sync)
                 {
-                    _latestProbe = probe;
                     _latestBoxes = boxes;
                     detectionConsumer = _detectionConsumer;
                 }
                 detectionConsumer?.SetAimAssistDetections(detectionState);
 
-                PushInferenceSample(sw.Elapsed.TotalMilliseconds, detectionCount, outputSummary);
+                PushInferenceSample(sw.Elapsed.TotalMilliseconds);
 
                 lock (_sync)
                 {
@@ -303,43 +217,22 @@ internal sealed class OnnxWorker : IDisposable
         {
             _snapshot = new OnnxInferenceSnapshot(
                 status,
-                _snapshot.InferenceFps,
-                _snapshot.AvgInferenceMs,
-                _snapshot.P95InferenceMs,
-                _snapshot.P99InferenceMs,
-                _snapshot.DetectionCount,
-                _snapshot.OutputSummary);
+                _snapshot.AvgInferenceMs);
         }
     }
 
-    private void PushInferenceSample(double ms, int detectionCount, string outputSummary)
+    private void PushInferenceSample(double ms)
     {
         lock (_sync)
         {
             _windowSamples.Add(ms);
-            _windowInferenceCount++;
             var elapsed = DateTime.UtcNow - _windowStartUtc;
             if (elapsed.TotalSeconds >= 1.0)
             {
-                var fps = _windowInferenceCount / elapsed.TotalSeconds;
                 var avg = _windowSamples.Count > 0 ? _windowSamples.Average() : 0.0;
-                var p95 = Percentile(_windowSamples, 0.95);
-                var p99 = Percentile(_windowSamples, 0.99);
-                _snapshot = new OnnxInferenceSnapshot("Running", fps, avg, p95, p99, detectionCount, outputSummary);
+                _snapshot = new OnnxInferenceSnapshot("Running", avg);
                 _windowSamples.Clear();
-                _windowInferenceCount = 0;
                 _windowStartUtc = DateTime.UtcNow;
-            }
-            else
-            {
-                _snapshot = new OnnxInferenceSnapshot(
-                    _snapshot.Status,
-                    _snapshot.InferenceFps,
-                    _snapshot.AvgInferenceMs,
-                    _snapshot.P95InferenceMs,
-                    _snapshot.P99InferenceMs,
-                    detectionCount,
-                    outputSummary);
             }
         }
     }
@@ -417,26 +310,6 @@ internal sealed class OnnxWorker : IDisposable
         return data;
     }
 
-    private static string BuildOutputSummary(IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs)
-    {
-        var parts = new List<string>();
-        foreach (var output in outputs.Take(3))
-        {
-            try
-            {
-                var tensor = output.AsTensor<float>();
-                var shape = string.Join("x", tensor.Dimensions.ToArray().Select(d => d.ToString()));
-                parts.Add($"{output.Name}:{shape}");
-            }
-            catch
-            {
-                parts.Add($"{output.Name}:non-float");
-            }
-        }
-
-        return parts.Count == 0 ? "No output" : string.Join(", ", parts);
-    }
-
     private static int CountDetections(
         IDisposableReadOnlyCollection<DisposableNamedOnnxValue> outputs,
         int inputWidth,
@@ -444,10 +317,8 @@ internal sealed class OnnxWorker : IDisposable
         float confThres,
         float iouThres,
         HashSet<int> allowedClasses,
-        out OnnxDebugProbe probe,
         out OnnxDebugBox[] boxes)
     {
-        probe = default;
         boxes = Array.Empty<OnnxDebugBox>();
         foreach (var output in outputs)
         {
@@ -468,7 +339,7 @@ internal sealed class OnnxWorker : IDisposable
 
             var dims = tensor.Dimensions.ToArray();
             var values = tensor.ToArray();
-            if (TryParseDetections(values, dims, inputWidth, inputHeight, confThres, iouThres, allowedClasses, out var count, out probe, out boxes))
+            if (TryParseDetections(values, dims, inputWidth, inputHeight, confThres, iouThres, allowedClasses, out var count, out boxes))
             {
                 return count;
             }
@@ -486,11 +357,9 @@ internal sealed class OnnxWorker : IDisposable
         float iouThres,
         HashSet<int> allowedClasses,
         out int count,
-        out OnnxDebugProbe probe,
         out OnnxDebugBox[] boxes)
     {
         count = 0;
-        probe = default;
         boxes = Array.Empty<OnnxDebugBox>();
         if (dims.Length != 3)
         {
@@ -592,18 +461,6 @@ internal sealed class OnnxWorker : IDisposable
         }
 
         count = kept.Count;
-        var primary = kept[0];
-        probe = new OnnxDebugProbe(
-            true,
-            inputWidth,
-            inputHeight,
-            primary.x,
-            primary.y,
-            primary.w,
-            primary.h,
-            primary.obj,
-            primary.classScore,
-            primary.score);
         boxes = kept.Select(box => new OnnxDebugBox(inputWidth, inputHeight, box.x, box.y, box.w, box.h, box.score)).ToArray();
         return true;
     }
@@ -636,26 +493,6 @@ internal sealed class OnnxWorker : IDisposable
         }
 
         return interArea / union;
-    }
-
-    private static double Percentile(List<double> values, double percentile)
-    {
-        if (values.Count == 0)
-        {
-            return 0.0;
-        }
-
-        values.Sort();
-        var rank = percentile * (values.Count - 1);
-        var low = (int)Math.Floor(rank);
-        var high = (int)Math.Ceiling(rank);
-        if (low == high)
-        {
-            return values[low];
-        }
-
-        var weight = rank - low;
-        return values[low] * (1.0 - weight) + values[high] * weight;
     }
 
     public void Dispose()

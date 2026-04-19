@@ -6,22 +6,6 @@ using Vortice.DXGI;
 using static Vortice.Direct3D11.D3D11;
 using static Vortice.DXGI.DXGI;
 
-internal readonly struct CaptureTelemetry
-{
-    public readonly long PollCount;
-    public readonly long SuccessCount;
-    public readonly double TotalCaptureMs;
-    public readonly double MaxCaptureMs;
-
-    public CaptureTelemetry(long pollCount, long successCount, double totalCaptureMs, double maxCaptureMs)
-    {
-        PollCount = pollCount;
-        SuccessCount = successCount;
-        TotalCaptureMs = totalCaptureMs;
-        MaxCaptureMs = maxCaptureMs;
-    }
-}
-
 internal sealed class DesktopCaptureWorker : IDisposable
 {
     private const double TargetCaptureIntervalMs = 1000.0 / 60.0;
@@ -41,10 +25,6 @@ internal sealed class DesktopCaptureWorker : IDisposable
     private string? _lastError;
     private OnnxWorker? _frameConsumer;
 
-    private long _pollCount;
-    private long _successCount;
-    private double _captureMsSum;
-    private double _captureMsMax;
     private readonly Queue<double> _pendingCaptureMs = new();
     private int _requestedCaptureWidth = 320;
     private int _requestedCaptureHeight = 320;
@@ -80,14 +60,6 @@ internal sealed class DesktopCaptureWorker : IDisposable
             System.Buffer.BlockCopy(_latestFrame, 0, uploadBuffer, 0, _latestFrame.Length);
             lastFrameId = _latestFrameId;
             return true;
-        }
-    }
-
-    public CaptureTelemetry GetTelemetrySnapshot()
-    {
-        lock (_sync)
-        {
-            return new CaptureTelemetry(_pollCount, _successCount, _captureMsSum, _captureMsMax);
         }
     }
 
@@ -206,14 +178,10 @@ internal sealed class DesktopCaptureWorker : IDisposable
 
                 lock (_sync)
                 {
-                    _pollCount++;
                     var elapsedMs = timer.Elapsed.TotalMilliseconds;
 
                     if (ok)
                     {
-                        _successCount++;
-                        _captureMsSum += elapsedMs;
-                        _captureMsMax = Math.Max(_captureMsMax, elapsedMs);
                         _pendingCaptureMs.Enqueue(elapsedMs);
                         _captureFrameId++;
                         frameId = _captureFrameId;
